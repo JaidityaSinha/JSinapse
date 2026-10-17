@@ -1,7 +1,75 @@
 
+import { useState } from 'react'
 import './App.css'
 
+type Repository = {
+  name: string
+  full_name: string
+  description: string | null
+  html_url: string
+  language: string | null
+  stargazers_count: number
+  forks_count: number
+  default_branch: string
+}
+
 function App() {
+  const [repoUrl, setRepoUrl] = useState('')
+  const [repository, setRepository] = useState<Repository | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function analyzeRepository() {
+    setError('')
+    setRepository(null)
+
+    const match = repoUrl.trim().match(
+        /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)\/?(?:[?#].*)?$/
+    )
+
+    if (!match) {
+      setError('Enter a valid public GitHub repository URL.')
+      return
+    }
+
+    const owner = match[1]
+    const repo = match[2].replace(/\.git$/, '')
+
+    if (!owner || !repo) {
+      setError('Enter a valid GitHub repository URL.')
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const response = await fetch(
+          `http://localhost:8080/api/github/repository?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+      )
+
+      if (!response.ok) {
+        throw new Error(
+            response.status === 404
+                ? 'Repository not found, or it is private.'
+                : `GitHub request failed (${response.status}).`
+        )
+      }
+
+      const data: Repository = await response.json()
+      setRepository(data)
+    } catch (err) {
+      setError(
+          err instanceof Error
+              ? err.message.includes('fetch')
+                  ? 'Could not connect to JSinapse. Make sure the backend is running.'
+                  : err.message
+              : 'Something went wrong while analyzing the repository.'
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
       <div className="app">
         <aside className="sidebar">
@@ -37,7 +105,8 @@ function App() {
               CODEBASE INTELLIGENCE PLATFORM
             </div>
 
-            <h1>Understand the connections<br />
+            <h1>
+              Understand the connections<br />
               <span>behind your code.</span>
             </h1>
 
@@ -52,13 +121,60 @@ function App() {
                   type="text"
                   placeholder="Paste a GitHub repository URL..."
                   aria-label="GitHub repository URL"
+                  value={repoUrl}
+                  onChange={(event) => setRepoUrl(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !loading) {
+                      void analyzeRepository()
+                    }
+                  }}
               />
-              <button className="analyze-button">Analyze repository ↗</button>
+              <button
+                  className="analyze-button"
+                  onClick={() => void analyzeRepository()}
+                  disabled={loading}
+              >
+                {loading ? 'Analyzing...' : 'Analyze repository ↗'}
+              </button>
             </div>
 
             <div className="input-hint">
               <span>↳</span> Public GitHub repositories · More providers coming soon
             </div>
+
+            {error && (
+                <p role="alert" style={{ color: '#ff8585' }}>
+                  {error}
+                </p>
+            )}
+
+            {repository && (
+                <article
+                    className="feature-card"
+                    style={{ marginTop: '24px', maxWidth: '720px' }}
+                >
+                  <h3>{repository.full_name}</h3>
+                  <p>{repository.description || 'No description provided.'}</p>
+
+                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginTop: '16px' }}>
+                    <span>Language: {repository.language || 'Not specified'}</span>
+                    <span>⭐ {repository.stargazers_count.toLocaleString()}</span>
+                    <span>⑂ {repository.forks_count.toLocaleString()} forks</span>
+                    <span>Branch: {repository.default_branch}</span>
+                  </div>
+
+                  <p style={{ marginTop: '16px' }}>
+                    <a
+                        href={repository.html_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#b6a0ff' }}
+                    >
+                      View on GitHub ↗
+                    </a>
+                  </p>
+                </article>
+            )}
           </section>
 
           <section className="section">
@@ -96,7 +212,7 @@ function App() {
                 <div className="feature-icon green">✧</div>
                 <h3>AI Code Assistant</h3>
                 <p>Ask questions about your repository and get context-aware explanations.</p>
-                <span className="feature-link">Understand code <span>↗</span></span>
+                <span className="feature-link">Understand code</span>
               </article>
             </div>
           </section>
