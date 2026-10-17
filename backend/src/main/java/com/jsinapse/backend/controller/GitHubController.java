@@ -21,4 +21,26 @@ public class GitHubController {
             @RequestParam String repo) {
         return gitHubService.getRepository(owner, repo);
     }
+
+    @GetMapping("/tree")
+    public Object getRepositoryTree(
+            @RequestParam String owner,
+            @RequestParam String repo) {
+
+        String branch = gitHubService.getDefaultBranch(owner, repo);
+
+        return gitHubService.getRepositoryTree(owner, repo, branch);
+    }
+
+    @GetMapping("/source-files")
+    public Object getSourceFiles(
+            @RequestParam String owner,
+            @RequestParam String repo) {
+
+        String branch = gitHubService.getDefaultBranch(owner, repo);
+
+        return gitHubService.getSourceFiles(owner, repo, branch);
+    }
+
+
 }
