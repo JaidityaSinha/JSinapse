@@ -1,6 +1,7 @@
 
 import { useState } from 'react'
 import './App.css'
+import CodeGalaxy from './CodeGalaxy'
 
 type Repository = {
   name: string
@@ -19,6 +20,28 @@ type SourceFile = {
   size?: number
 }
 
+type GraphNode = {
+  id: string
+  type: string
+  name: string
+  filePath: string
+  startLine: number | null
+  endLine: number | null
+}
+
+type GraphRelationship = {
+  sourceId: string
+  type: string
+  targetId: string
+}
+
+type CodeGraphData = {
+  nodes: GraphNode[]
+  relationships: GraphRelationship[]
+}
+
+type View = 'overview' | 'galaxy'
+
 function App() {
   const [repoUrl, setRepoUrl] = useState('')
   const [repository, setRepository] = useState<Repository | null>(null)
@@ -31,13 +54,53 @@ function App() {
   const [fileError, setFileError] = useState('')
   const [error, setError] = useState('')
 
+  const [view, setView] = useState<View>('overview')
+  const [graph, setGraph] = useState<CodeGraphData | null>(null)
+  const [graphLoading, setGraphLoading] = useState(false)
+  const [graphError, setGraphError] = useState('')
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+
+  const connectedComponents = graph && selectedNode
+      ? graph.relationships
+          .filter(
+              relationship =>
+                  relationship.sourceId === selectedNode.id ||
+                  relationship.targetId === selectedNode.id
+          )
+          .map(relationship => {
+            const isOutgoing = relationship.sourceId === selectedNode.id
+            const connectedId = isOutgoing
+                ? relationship.targetId
+                : relationship.sourceId
+
+            const connectedNode = graph.nodes.find(
+                node => node.id === connectedId
+            )
+
+            if (!connectedNode) return null
+
+            return {
+              node: connectedNode,
+              relationship: relationship.type,
+              direction: isOutgoing ? 'OUTGOING' : 'INCOMING',
+            }
+          })
+          .filter(
+              (item): item is NonNullable<typeof item> => item !== null
+          )
+      : []
+
   async function analyzeRepository() {
     setError('')
     setFileError('')
+    setGraphError('')
     setRepository(null)
     setSourceFiles([])
     setSelectedFile('')
     setFileContent('')
+    setGraph(null)
+    setSelectedNode(null)
+    setView('overview')
 
     const match = repoUrl.trim().match(
         /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)\/?(?:[?#].*)?$/
@@ -52,7 +115,7 @@ function App() {
     const repo = match[2].replace(/\.git$/, '')
 
     if (!owner || !repo) {
-      setError('Enter a valid GitHub repository URL.')
+      setError('Enter a valid public GitHub repository URL.')
       return
     }
 
@@ -89,9 +152,7 @@ function App() {
         setSourceFiles(files)
       } catch (err) {
         setFileError(
-            err instanceof Error
-                ? err.message
-                : 'Could not load source files.'
+            err instanceof Error ? err.message : 'Could not load source files.'
         )
       } finally {
         setFilesLoading(false)
@@ -128,14 +189,49 @@ function App() {
         throw new Error(`Could not load file (${response.status}).`)
       }
 
-      const content = await response.text()
-      setFileContent(content)
+      setFileContent(await response.text())
     } catch (err) {
       setFileError(
+          err instanceof Error ? err.message : 'Could not load this file.'
+      )
+    }
+  }
+
+  async function openGalaxy() {
+    setView('galaxy')
+    setGraphError('')
+    setSelectedNode(null)
+
+    if (!repository || graph || graphLoading) return
+
+    const [owner, repo] = repository.full_name.split('/')
+    if (!owner || !repo) return
+
+    setGraphLoading(true)
+
+    try {
+      const response = await fetch(
+          `http://localhost:8080/api/analysis/graph?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+      )
+
+      if (!response.ok) {
+        throw new Error(
+            response.status === 403
+                ? 'GitHub rate limit exceeded. Check that the backend is using your GitHub token.'
+                : `Code analysis failed (${response.status}).`
+        )
+      }
+
+      const data: CodeGraphData = await response.json()
+      setGraph(data)
+    } catch (err) {
+      setGraphError(
           err instanceof Error
               ? err.message
-              : 'Could not load this file.'
+              : 'Could not generate the code graph.'
       )
+    } finally {
+      setGraphLoading(false)
     }
   }
 
@@ -152,10 +248,44 @@ function App() {
           </div>
 
           <div className="sidebar-label">WORKSPACE</div>
-          <button className="nav-item active">⌘ Overview</button>
-          <button className="nav-item">◈ Code Galaxy</button>
-          <button className="nav-item">⌁ Dependencies</button>
-          <button className="nav-item">⌕ Code Search</button>
+
+          <button
+              className={`nav-item ${view === 'overview' ? 'active' : ''}`}
+              onClick={() => setView('overview')}
+          >
+            ⌘ Overview
+          </button>
+
+          <button
+              className={`nav-item ${view === 'galaxy' ? 'active' : ''}`}
+              onClick={() => void openGalaxy()}
+          >
+            ◈ Code Galaxy
+          </button>
+
+          <button
+              className="nav-item"
+              onClick={() => {
+                setView('overview')
+                document.querySelector('.section')?.scrollIntoView({
+                  behavior: 'smooth'
+                })
+              }}
+          >
+            ⌁ Dependencies
+          </button>
+
+          <button
+              className="nav-item"
+              onClick={() => {
+                setView('overview')
+                document.querySelector<HTMLInputElement>(
+                    'input[aria-label="Search source files"]'
+                )?.focus()
+              }}
+          >
+            ⌕ Code Search
+          </button>
 
           <div className="sidebar-bottom">
             <div className="status-dot" />
@@ -167,7 +297,7 @@ function App() {
           <header className="topbar">
             <div>
               <span className="breadcrumb">Workspace / </span>
-              <span>Overview</span>
+              <span>{view === 'galaxy' ? 'Code Galaxy' : 'Overview'}</span>
             </div>
             <div className="avatar">JS</div>
           </header>
@@ -253,169 +383,385 @@ function App() {
             )}
           </section>
 
-          {repository && (
+          {view === 'galaxy' ? (
               <section className="section">
                 <div className="section-heading">
                   <div>
-                    <h2>Source Explorer</h2>
-                    <p>Browse source files and inspect their contents.</p>
+                    <h2>Code Galaxy</h2>
+                    <p>
+                      Explore the structure and connections inside your repository.
+                    </p>
                   </div>
                   <span className="coming-soon">
-                {sourceFiles.length} FILES
+                {graph ? `${graph.nodes.length} NODES` : 'INTERACTIVE GRAPH'}
               </span>
                 </div>
 
-                {filesLoading && <p>Loading source files...</p>}
-
-                {fileError && (
-                    <p role="alert" style={{ color: '#ff8585' }}>{fileError}</p>
+                {!repository && (
+                    <article className="feature-card">
+                      <h3>Choose a repository first</h3>
+                      <p>
+                        Paste a GitHub repository URL above and select Analyze
+                        repository to get started.
+                      </p>
+                    </article>
                 )}
 
-                {!filesLoading && !fileError && sourceFiles.length === 0 && (
-                    <p>No supported source files or README files were found.</p>
+                {graphLoading && (
+                    <article className="feature-card">
+                      <h3>Building your galaxy...</h3>
+                      <p>
+                        Fetching source code and analyzing relationships. Larger
+                        repositories may take a little longer.
+                      </p>
+                    </article>
                 )}
 
-                {sourceFiles.length > 0 && (
-                    <div style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)',
-                      gap: '16px',
-                      alignItems: 'start'
-                    }}>
-                      <article className="feature-card" style={{ minWidth: 0 }}>
-                        <input
-                            type="text"
-                            placeholder="Search files..."
-                            aria-label="Search source files"
-                            value={fileSearch}
-                            onChange={event => setFileSearch(event.target.value)}
-                            style={{
-                              width: '100%',
-                              boxSizing: 'border-box',
-                              padding: '10px',
-                              marginBottom: '12px',
-                              borderRadius: '8px',
-                              border: '1px solid #303647',
-                              background: '#0b0e16',
-                              color: '#ffffff'
-                            }}
-                        />
+                {graphError && (
+                    <article className="feature-card" role="alert">
+                      <h3>Could not load the code graph</h3>
+                      <p style={{ color: '#ff8585' }}>{graphError}</p>
+                      <button
+                          className="analyze-button"
+                          onClick={() => {
+                            setGraph(null)
+                            void openGalaxy()
+                          }}
+                      >
+                        Retry analysis
+                      </button>
+                    </article>
+                )}
 
-                        <div style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '6px',
-                          maxHeight: '420px',
-                          overflowY: 'auto'
-                        }}>
-                          {filteredFiles.map(file => (
-                              <button
-                                  key={file.path}
-                                  onClick={() => void openFile(file.path)}
-                                  style={{
-                                    textAlign: 'left',
-                                    padding: '10px',
-                                    borderRadius: '6px',
-                                    border: '1px solid',
-                                    borderColor: selectedFile === file.path
-                                        ? '#8b72ef'
-                                        : 'transparent',
-                                    background: selectedFile === file.path
-                                        ? '#25203d'
-                                        : 'transparent',
-                                    color: '#e5e7eb',
-                                    cursor: 'pointer',
-                                    overflowWrap: 'anywhere'
-                                  }}
-                              >
-                                <span style={{ marginRight: '8px' }}>📄</span>
-                                {file.path}
-                              </button>
-                          ))}
-
-                          {filteredFiles.length === 0 && (
-                              <p>No matching files.</p>
-                          )}
-                        </div>
-                      </article>
-
-                      <article className="feature-card" style={{ minWidth: 0 }}>
-                        <h3 style={{ overflowWrap: 'anywhere' }}>
-                          {selectedFile || 'Select a file to preview'}
-                        </h3>
-
-                        {selectedFile && !fileContent && !fileError && (
-                            <p>Loading file contents...</p>
-                        )}
-
-                        {fileContent && (
-                            <pre style={{
-                              marginTop: '16px',
-                              padding: '16px',
-                              borderRadius: '8px',
-                              background: '#090b11',
-                              color: '#d8deeb',
-                              overflow: 'auto',
-                              maxHeight: '520px',
-                              whiteSpace: 'pre',
-                              fontSize: '13px',
-                              lineHeight: 1.6
+                {graph && !graphLoading && (
+                    <>
+                      {graph.nodes.length === 0 ? (
+                          <article className="feature-card">
+                            <h3>No supported code found</h3>
+                            <p>
+                              The current parser supports Java source files. Try a
+                              repository containing Java classes and methods.
+                            </p>
+                          </article>
+                      ) : (
+                          <>
+                            <div style={{
+                              display: 'flex',
+                              gap: '18px',
+                              flexWrap: 'wrap',
+                              margin: '16px 0',
+                              color: '#aab4c8',
+                              fontSize: '13px'
                             }}>
-                      <code>{fileContent}</code>
-                    </pre>
-                        )}
+                            </div>
 
-                        {!selectedFile && (
-                            <p>Choose a file from the list to view its contents here.</p>
-                        )}
-                      </article>
-                    </div>
+                            <CodeGalaxy
+                                graph={graph}
+                                onSelectNode={setSelectedNode}
+                            />
+
+                            {selectedNode && (
+                                <article
+                                    className="feature-card"
+                                    style={{ marginTop: '16px' }}
+                                >
+                                  <div style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    gap: '12px',
+                                    alignItems: 'start'
+                                  }}>
+                                    <div>
+                                      <div className="eyebrow">
+                                        {selectedNode.type}
+                                      </div>
+                                      <h3 style={{ overflowWrap: 'anywhere' }}>
+                                        {selectedNode.name}
+                                      </h3>
+                                    </div>
+                                    <button
+                                        className="nav-item"
+                                        onClick={() => setSelectedNode(null)}
+                                    >
+                                      Close ✕
+                                    </button>
+                                  </div>
+
+                                  <p style={{ overflowWrap: 'anywhere' }}>
+                                    {selectedNode.filePath}
+                                  </p>
+
+                                  {selectedNode.startLine != null && (
+                                      <p>
+                                        Lines {selectedNode.startLine}
+                                        {selectedNode.endLine != null &&
+                                            `–${selectedNode.endLine}`}
+                                      </p>
+                                  )}
+
+
+                                  <div style={{ marginTop: '20px' }}>
+                                    <h4 style={{ color: '#cbd5e1', marginBottom: '10px' }}>
+                                      Connected components
+                                    </h4>
+
+                                    {connectedComponents.length === 0 ? (
+                                        <p style={{ color: '#94a3b8', fontSize: '13px' }}>
+                                          No connected components found for this node.
+                                        </p>
+                                    ) : (
+                                        <div style={{
+                                          display: 'flex',
+                                          flexDirection: 'column',
+                                          gap: '8px'
+                                        }}>
+                                          {connectedComponents.map((item, index) => (
+                                              <button
+                                                  key={`${item.node.id}-${item.relationship}-${index}`}
+                                                  onClick={() => setSelectedNode(item.node)}
+                                                  style={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    gap: '12px',
+                                                    width: '100%',
+                                                    textAlign: 'left',
+                                                    padding: '12px',
+                                                    borderRadius: '8px',
+                                                    border: '1px solid #303647',
+                                                    background: '#101722',
+                                                    color: '#e2e8f0',
+                                                    cursor: 'pointer'
+                                                  }}
+                                              >
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            <strong>{item.node.name}</strong>
+            <span style={{
+              display: 'block',
+              color: '#94a3b8',
+              fontSize: '11px',
+              marginTop: '4px'
+            }}>
+              {item.node.type} · {item.direction}
+            </span>
+          </span>
+
+                                                <span style={{
+                                                  color: '#67e8f9',
+                                                  fontSize: '10px',
+                                                  flexShrink: 0
+                                                }}>
+            {item.relationship}
+          </span>
+                                              </button>
+                                          ))}
+                                        </div>
+                                    )}
+                                  </div>
+
+
+                                  <button
+                                      className="analyze-button"
+                                      onClick={() => {
+                                        setView('overview')
+                                        void openFile(selectedNode.filePath)
+                                        window.scrollTo({ top: 0, behavior: 'smooth' })
+                                      }}
+                                  >
+                                    Open source file ↗
+                                  </button>
+                                </article>
+                            )}
+                          </>
+                      )}
+                    </>
                 )}
               </section>
+          ) : (
+              <>
+                {repository && (
+                    <section className="section">
+                      <div className="section-heading">
+                        <div>
+                          <h2>Source Explorer</h2>
+                          <p>Browse source files and inspect their contents.</p>
+                        </div>
+                        <span className="coming-soon">
+                    {sourceFiles.length} FILES
+                  </span>
+                      </div>
+
+                      {filesLoading && <p>Loading source files...</p>}
+
+                      {fileError && (
+                          <p role="alert" style={{ color: '#ff8585' }}>{fileError}</p>
+                      )}
+
+                      {!filesLoading && !fileError && sourceFiles.length === 0 && (
+                          <p>No supported source files or README files were found.</p>
+                      )}
+
+                      {sourceFiles.length > 0 && (
+                          <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)',
+                            gap: '16px',
+                            alignItems: 'start'
+                          }}>
+                            <article className="feature-card" style={{ minWidth: 0 }}>
+                              <input
+                                  type="text"
+                                  placeholder="Search files..."
+                                  aria-label="Search source files"
+                                  value={fileSearch}
+                                  onChange={event => setFileSearch(event.target.value)}
+                                  style={{
+                                    width: '100%',
+                                    boxSizing: 'border-box',
+                                    padding: '10px',
+                                    marginBottom: '12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #303647',
+                                    background: '#0b0e16',
+                                    color: '#ffffff'
+                                  }}
+                              />
+
+                              <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '6px',
+                                maxHeight: '420px',
+                                overflowY: 'auto'
+                              }}>
+                                {filteredFiles.map(file => (
+                                    <button
+                                        key={file.path}
+                                        onClick={() => void openFile(file.path)}
+                                        style={{
+                                          textAlign: 'left',
+                                          padding: '10px',
+                                          borderRadius: '6px',
+                                          border: '1px solid',
+                                          borderColor: selectedFile === file.path
+                                              ? '#8b72ef'
+                                              : 'transparent',
+                                          background: selectedFile === file.path
+                                              ? '#25203d'
+                                              : 'transparent',
+                                          color: '#e5e7eb',
+                                          cursor: 'pointer',
+                                          overflowWrap: 'anywhere'
+                                        }}
+                                    >
+                                      <span style={{ marginRight: '8px' }}>📄</span>
+                                      {file.path}
+                                    </button>
+                                ))}
+
+                                {filteredFiles.length === 0 && (
+                                    <p>No matching files.</p>
+                                )}
+                              </div>
+                            </article>
+
+                            <article className="feature-card" style={{ minWidth: 0 }}>
+                              <h3 style={{ overflowWrap: 'anywhere' }}>
+                                {selectedFile || 'Select a file to preview'}
+                              </h3>
+
+                              {selectedFile && !fileContent && !fileError && (
+                                  <p>Loading file contents...</p>
+                              )}
+
+                              {fileContent && (
+                                  <pre style={{
+                                    marginTop: '16px',
+                                    padding: '16px',
+                                    borderRadius: '8px',
+                                    background: '#090b11',
+                                    color: '#d8deeb',
+                                    overflow: 'auto',
+                                    maxHeight: '520px',
+                                    whiteSpace: 'pre',
+                                    fontSize: '13px',
+                                    lineHeight: 1.6
+                                  }}>
+                          <code>{fileContent}</code>
+                        </pre>
+                              )}
+
+                              {!selectedFile && (
+                                  <p>
+                                    Choose a file from the list to view its contents here.
+                                  </p>
+                              )}
+                            </article>
+                          </div>
+                      )}
+                    </section>
+                )}
+
+                <section className="section">
+                  <div className="section-heading">
+                    <div>
+                      <h2>Your codebase, visualized</h2>
+                      <p>Tools to understand software beyond individual files.</p>
+                    </div>
+                    <span className="coming-soon">YOUR WORKSPACE</span>
+                  </div>
+
+                  <div className="feature-grid">
+                    <article className="feature-card">
+                      <div className="feature-icon purple">✳</div>
+                      <h3>Code Galaxy</h3>
+                      <p>
+                        Explore files and modules as an interactive network of
+                        connected nodes.
+                      </p>
+                      <button
+                          className="feature-link"
+                          onClick={() => void openGalaxy()}
+                      >
+                        Explore architecture ↗
+                      </button>
+                    </article>
+
+                    <article className="feature-card">
+                      <div className="feature-icon cyan">⌁</div>
+                      <h3>Dependency Explorer</h3>
+                      <p>
+                        See what depends on what, and understand the impact of changes.
+                      </p>
+                      <span className="feature-link">Map dependencies ↗</span>
+                    </article>
+
+                    <article className="feature-card">
+                      <div className="feature-icon orange">⌘</div>
+                      <h3>Execution Traces</h3>
+                      <p>
+                        Follow the path from an entry point through the code it invokes.
+                      </p>
+                      <span className="feature-link">Trace execution ↗</span>
+                    </article>
+
+                    <article className="feature-card">
+                      <div className="feature-icon green">✧</div>
+                      <h3>AI Code Assistant</h3>
+                      <p>
+                        Ask questions about your repository and get context-aware explanations.
+                      </p>
+                      <span className="feature-link">Understand code</span>
+                    </article>
+                  </div>
+                </section>
+              </>
           )}
 
-          <section className="section">
-            <div className="section-heading">
-              <div>
-                <h2>Your codebase, visualized</h2>
-                <p>Tools to understand software beyond individual files.</p>
-              </div>
-              <span className="coming-soon">YOUR WORKSPACE</span>
-            </div>
-
-            <div className="feature-grid">
-              <article className="feature-card">
-                <div className="feature-icon purple">✳</div>
-                <h3>Code Galaxy</h3>
-                <p>Explore files and modules as an interactive network of connected nodes.</p>
-                <span className="feature-link">Explore architecture <span>↗</span></span>
-              </article>
-
-              <article className="feature-card">
-                <div className="feature-icon cyan">⌁</div>
-                <h3>Dependency Explorer</h3>
-                <p>See what depends on what, and understand the impact of changes.</p>
-                <span className="feature-link">Map dependencies <span>↗</span></span>
-              </article>
-
-              <article className="feature-card">
-                <div className="feature-icon orange">⌘</div>
-                <h3>Execution Traces</h3>
-                <p>Follow the path from an entry point through the code it invokes.</p>
-                <span className="feature-link">Trace execution <span>↗</span></span>
-              </article>
-
-              <article className="feature-card">
-                <div className="feature-icon green">✧</div>
-                <h3>AI Code Assistant</h3>
-                <p>Ask questions about your repository and get context-aware explanations.</p>
-                <span className="feature-link">Understand code</span>
-              </article>
-            </div>
-          </section>
-
           <footer className="footer">
-            <span>JSinapse <span className="footer-muted">· Codebase Intelligence</span></span>
+          <span>
+            JSinapse <span className="footer-muted">· Codebase Intelligence</span>
+          </span>
             <span>Built to make complex code understandable.</span>
           </footer>
         </main>
