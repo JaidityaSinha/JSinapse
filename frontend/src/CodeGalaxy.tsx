@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
     Background,
@@ -63,23 +64,13 @@ function FocusSelectedNode({
         const flowNode = getNode(focusNodeId);
         if (!flowNode) return;
 
-        const width =
-            typeof flowNode.measured?.width === "number"
-                ? flowNode.measured.width
-                : 160;
-
-        const height =
-            typeof flowNode.measured?.height === "number"
-                ? flowNode.measured.height
-                : 44;
+        const width = flowNode.measured?.width ?? 160;
+        const height = flowNode.measured?.height ?? 44;
 
         void setCenter(
             flowNode.position.x + width / 2,
             flowNode.position.y + height / 2,
-            {
-                zoom: 1.2,
-                duration: 450,
-            }
+            { zoom: 1.2, duration: 450 }
         );
 
         onFocused(focusNodeId);
@@ -98,14 +89,12 @@ export default function CodeGalaxy({
     );
     const [showAll, setShowAll] = useState(false);
     const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
-
-    // Search state
+    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchOpen, setSearchOpen] = useState(false);
 
     const searchResults = useMemo(() => {
         const query = searchQuery.trim().toLowerCase();
-
         if (!query) return [];
 
         return graph.nodes
@@ -119,11 +108,8 @@ export default function CodeGalaxy({
 
     const handleSearchSelect = (node: GraphNode) => {
         setShowAll(true);
-        setExpandedIds((previous) => {
-            const next = new Set(previous);
-            next.add(node.id);
-            return next;
-        });
+        setSelectedNodeId(node.id);
+        setExpandedIds((previous) => new Set(previous).add(node.id));
         setPendingFocusId(node.id);
         onSelectNode?.(node);
         setSearchQuery(node.name);
@@ -158,22 +144,50 @@ export default function CodeGalaxy({
         return graph.nodes.filter((node) => visibleIds.has(node.id));
     }, [graph, expandedIds, showAll]);
 
+    const activeNodeId = selectedNodeId ?? focusNodeId ?? null;
+
     const { nodes, edges } = useMemo(() => {
         const visibleIds = new Set(
             visibleGraphNodes.map((node) => node.id)
         );
 
+        const connectedNodeIds = new Set<string>();
+
+        if (activeNodeId) {
+            connectedNodeIds.add(activeNodeId);
+
+            graph.relationships.forEach((relationship) => {
+                if (relationship.sourceId === activeNodeId) {
+                    connectedNodeIds.add(relationship.targetId);
+                }
+
+                if (relationship.targetId === activeNodeId) {
+                    connectedNodeIds.add(relationship.sourceId);
+                }
+            });
+        }
+
+        const hasConnectedSelection = connectedNodeIds.size > 1;
+        const query = searchQuery.trim().toLowerCase();
 
         const flowNodes: Node[] = visibleGraphNodes.map((node, index) => {
             const angle = index * 2.39996;
             const radius = 100 + Math.sqrt(index) * 75;
             const accent = nodeColors[node.type] ?? "#8493a8";
 
-            const isSelected = node.id === focusNodeId;
+            const isSelected = node.id === activeNodeId;
+            const isConnected = connectedNodeIds.has(node.id);
+            const isUnrelated =
+                hasConnectedSelection && !isConnected;
+
             const isSearchMatch =
-                searchQuery.trim().length > 0 &&
-                (node.name.toLowerCase().includes(searchQuery.trim().toLowerCase()) ||
-                    node.filePath.toLowerCase().includes(searchQuery.trim().toLowerCase()));
+                query.length > 0 &&
+                (node.name.toLowerCase().includes(query) ||
+                    node.filePath.toLowerCase().includes(query));
+
+            const isDimmed =
+                isUnrelated ||
+                (query.length > 0 && !isSearchMatch && !isSelected);
 
             return {
                 id: node.id,
@@ -181,14 +195,12 @@ export default function CodeGalaxy({
                     x: Math.cos(angle) * radius,
                     y: Math.sin(angle) * radius,
                 },
-                data: {
-                    label: node.name,
-                },
+                data: { label: node.name },
                 style: {
                     background: isSelected
                         ? "#263b50"
                         : isSearchMatch
-                            ? "#302b1b"
+                            ? `${accent}20`
                             : "#151c27",
                     color: "#dce3ec",
                     border: isSelected
@@ -201,18 +213,16 @@ export default function CodeGalaxy({
                     fontSize: 11,
                     width: 160,
                     boxShadow: isSelected
-                        ? "0 0 20px #ffffff55"
+                        ? "0 0 20px #ffffff66"
                         : isSearchMatch
                             ? `0 0 16px ${accent}66`
                             : `0 3px 12px ${accent}18`,
-                    opacity:
-                        searchQuery.trim().length > 0 && !isSearchMatch && !isSelected
-                            ? 0.45
-                            : 1,
+                    opacity: isDimmed ? 0.2 : 1,
+                    transition:
+                        "opacity 200ms ease, box-shadow 200ms ease, background 200ms ease",
                 },
             };
         });
-
 
         const flowEdges: Edge[] = graph.relationships
             .filter(
@@ -226,6 +236,14 @@ export default function CodeGalaxy({
                     relationship.type === "EXTENDS" ||
                     relationship.type === "IMPLEMENTS";
 
+                const isConnectedEdge =
+                    !!activeNodeId &&
+                    (relationship.sourceId === activeNodeId ||
+                        relationship.targetId === activeNodeId);
+
+                const isDimmedEdge =
+                    hasConnectedSelection && !isConnectedEdge;
+
                 return {
                     id: `edge-${index}`,
                     source: relationship.sourceId,
@@ -234,16 +252,22 @@ export default function CodeGalaxy({
                     type: "default",
                     animated: false,
                     style: {
-                        stroke: isCall
-                            ? "#81b9b5"
-                            : isInheritance
-                                ? "#c084fc"
-                                : "#465363",
-                        strokeWidth: isCall ? 1.6 : 1,
-                        opacity: 0.75,
+                        stroke: isConnectedEdge
+                            ? "#ffffff"
+                            : isCall
+                                ? "#81b9b5"
+                                : isInheritance
+                                    ? "#c084fc"
+                                    : "#465363",
+                        strokeWidth: isConnectedEdge
+                            ? 2.5
+                            : isCall
+                                ? 1.6
+                                : 1,
+                        opacity: isDimmedEdge ? 0.08 : 0.75,
                     },
                     labelStyle: {
-                        fill: "#9ba9ba",
+                        fill: isConnectedEdge ? "#ffffff" : "#9ba9ba",
                         fontSize: 9,
                     },
                     labelBgStyle: {
@@ -253,11 +277,13 @@ export default function CodeGalaxy({
                 };
             });
 
-        return {
-            nodes: flowNodes,
-            edges: flowEdges,
-        };
-    }, [visibleGraphNodes, graph.relationships]);
+        return { nodes: flowNodes, edges: flowEdges };
+    }, [
+        visibleGraphNodes,
+        graph.relationships,
+        activeNodeId,
+        searchQuery,
+    ]);
 
     const handleNodeClick = (_event: MouseEvent, flowNode: Node) => {
         const selected = graph.nodes.find(
@@ -266,17 +292,12 @@ export default function CodeGalaxy({
 
         if (!selected) return;
 
+        setSelectedNodeId(selected.id);
         onSelectNode?.(selected);
 
         setExpandedIds((previous) => {
             const next = new Set(previous);
-
-            if (next.has(selected.id)) {
-                next.delete(selected.id);
-            } else {
-                next.add(selected.id);
-            }
-
+            next.add(selected.id);
             return next;
         });
     };
@@ -285,6 +306,7 @@ export default function CodeGalaxy({
         setExpandedIds(new Set());
         setShowAll(false);
         setPendingFocusId(null);
+        setSelectedNodeId(null);
         setSearchQuery("");
         setSearchOpen(false);
     };
@@ -305,15 +327,12 @@ export default function CodeGalaxy({
         const exists = graph.nodes.some(
             (node) => node.id === focusNodeId
         );
-
         if (!exists) return;
 
-        setExpandedIds((previous) => {
-            const next = new Set(previous);
-            next.add(focusNodeId);
-            return next;
-        });
-
+        setSelectedNodeId(focusNodeId);
+        setExpandedIds((previous) =>
+            new Set(previous).add(focusNodeId)
+        );
         setPendingFocusId(focusNodeId);
     }, [focusNodeId, graph.nodes]);
 
@@ -340,7 +359,6 @@ export default function CodeGalaxy({
                     }}
                     onFocus={() => setSearchOpen(true)}
                     onBlur={() => {
-                        // Delay closing so a result can receive its click.
                         window.setTimeout(() => setSearchOpen(false), 150);
                     }}
                     onKeyDown={(event) => {
@@ -432,7 +450,6 @@ export default function CodeGalaxy({
                                             {node.type}
                                         </span>
                                     </div>
-
                                     <div
                                         style={{
                                             marginTop: 4,
@@ -460,7 +477,7 @@ export default function CodeGalaxy({
                 )}
             </div>
 
-            {/* Existing legend and graph controls */}
+            {/* Legend and graph controls */}
             <div
                 style={{
                     display: "flex",
@@ -481,6 +498,7 @@ export default function CodeGalaxy({
                 >
                     {[
                         ["Classes", "#c084fc"],
+                        ["Interfaces", "#f472b6"],
                         ["Methods", "#34d399"],
                         ["Files", "#60a5fa"],
                         ["Fields", "#fbbf24"],
@@ -541,6 +559,7 @@ export default function CodeGalaxy({
                 </div>
             </div>
 
+            {/* Graph canvas */}
             <div
                 style={{
                     position: "relative",
@@ -568,14 +587,10 @@ export default function CodeGalaxy({
                         onFocused={handleFocusComplete}
                     />
 
-                    <Background
-                        color="#344255"
-                        gap={24}
-                        size={1}
-                    />
-
+                    <Background color="#344255" gap={24} size={1} />
                     <Controls />
 
+                    {/* Graph overview and minimap */}
                     <div
                         style={{
                             position: "absolute",
@@ -637,9 +652,9 @@ export default function CodeGalaxy({
                             position="bottom-right"
                             pannable
                             zoomable
-                            nodeColor={(node) => {
+                            nodeColor={(flowNode) => {
                                 const original = graph.nodes.find(
-                                    (item) => item.id === node.id
+                                    (item) => item.id === flowNode.id
                                 );
 
                                 return original
