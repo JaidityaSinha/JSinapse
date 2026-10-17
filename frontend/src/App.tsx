@@ -13,15 +13,31 @@ type Repository = {
   default_branch: string
 }
 
+type SourceFile = {
+  path: string
+  type: string
+  size?: number
+}
+
 function App() {
   const [repoUrl, setRepoUrl] = useState('')
   const [repository, setRepository] = useState<Repository | null>(null)
+  const [sourceFiles, setSourceFiles] = useState<SourceFile[]>([])
+  const [selectedFile, setSelectedFile] = useState('')
+  const [fileContent, setFileContent] = useState('')
+  const [fileSearch, setFileSearch] = useState('')
   const [loading, setLoading] = useState(false)
+  const [filesLoading, setFilesLoading] = useState(false)
+  const [fileError, setFileError] = useState('')
   const [error, setError] = useState('')
 
   async function analyzeRepository() {
     setError('')
+    setFileError('')
     setRepository(null)
+    setSourceFiles([])
+    setSelectedFile('')
+    setFileContent('')
 
     const match = repoUrl.trim().match(
         /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)\/?(?:[?#].*)?$/
@@ -51,12 +67,35 @@ function App() {
         throw new Error(
             response.status === 404
                 ? 'Repository not found, or it is private.'
-                : `GitHub request failed (${response.status}).`
+                : `Repository request failed (${response.status}).`
         )
       }
 
       const data: Repository = await response.json()
       setRepository(data)
+
+      setFilesLoading(true)
+
+      try {
+        const filesResponse = await fetch(
+            `http://localhost:8080/api/github/source-files?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+        )
+
+        if (!filesResponse.ok) {
+          throw new Error(`Source file request failed (${filesResponse.status}).`)
+        }
+
+        const files: SourceFile[] = await filesResponse.json()
+        setSourceFiles(files)
+      } catch (err) {
+        setFileError(
+            err instanceof Error
+                ? err.message
+                : 'Could not load source files.'
+        )
+      } finally {
+        setFilesLoading(false)
+      }
     } catch (err) {
       setError(
           err instanceof Error
@@ -69,6 +108,40 @@ function App() {
       setLoading(false)
     }
   }
+
+  async function openFile(path: string) {
+    if (!repository) return
+
+    const [owner, repo] = repository.full_name.split('/')
+    if (!owner || !repo) return
+
+    setSelectedFile(path)
+    setFileContent('')
+    setFileError('')
+
+    try {
+      const response = await fetch(
+          `http://localhost:8080/api/github/file?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`
+      )
+
+      if (!response.ok) {
+        throw new Error(`Could not load file (${response.status}).`)
+      }
+
+      const content = await response.text()
+      setFileContent(content)
+    } catch (err) {
+      setFileError(
+          err instanceof Error
+              ? err.message
+              : 'Could not load this file.'
+      )
+    }
+  }
+
+  const filteredFiles = sourceFiles.filter(file =>
+      file.path.toLowerCase().includes(fileSearch.toLowerCase())
+  )
 
   return (
       <div className="app">
@@ -122,8 +195,8 @@ function App() {
                   placeholder="Paste a GitHub repository URL..."
                   aria-label="GitHub repository URL"
                   value={repoUrl}
-                  onChange={(event) => setRepoUrl(event.target.value)}
-                  onKeyDown={(event) => {
+                  onChange={event => setRepoUrl(event.target.value)}
+                  onKeyDown={event => {
                     if (event.key === 'Enter' && !loading) {
                       void analyzeRepository()
                     }
@@ -143,9 +216,7 @@ function App() {
             </div>
 
             {error && (
-                <p role="alert" style={{ color: '#ff8585' }}>
-                  {error}
-                </p>
+                <p role="alert" style={{ color: '#ff8585' }}>{error}</p>
             )}
 
             {repository && (
@@ -156,7 +227,12 @@ function App() {
                   <h3>{repository.full_name}</h3>
                   <p>{repository.description || 'No description provided.'}</p>
 
-                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginTop: '16px' }}>
+                  <div style={{
+                    display: 'flex',
+                    gap: '20px',
+                    flexWrap: 'wrap',
+                    marginTop: '16px'
+                  }}>
                     <span>Language: {repository.language || 'Not specified'}</span>
                     <span>⭐ {repository.stargazers_count.toLocaleString()}</span>
                     <span>⑂ {repository.forks_count.toLocaleString()} forks</span>
@@ -176,6 +252,127 @@ function App() {
                 </article>
             )}
           </section>
+
+          {repository && (
+              <section className="section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Source Explorer</h2>
+                    <p>Browse source files and inspect their contents.</p>
+                  </div>
+                  <span className="coming-soon">
+                {sourceFiles.length} FILES
+              </span>
+                </div>
+
+                {filesLoading && <p>Loading source files...</p>}
+
+                {fileError && (
+                    <p role="alert" style={{ color: '#ff8585' }}>{fileError}</p>
+                )}
+
+                {!filesLoading && !fileError && sourceFiles.length === 0 && (
+                    <p>No supported source files or README files were found.</p>
+                )}
+
+                {sourceFiles.length > 0 && (
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)',
+                      gap: '16px',
+                      alignItems: 'start'
+                    }}>
+                      <article className="feature-card" style={{ minWidth: 0 }}>
+                        <input
+                            type="text"
+                            placeholder="Search files..."
+                            aria-label="Search source files"
+                            value={fileSearch}
+                            onChange={event => setFileSearch(event.target.value)}
+                            style={{
+                              width: '100%',
+                              boxSizing: 'border-box',
+                              padding: '10px',
+                              marginBottom: '12px',
+                              borderRadius: '8px',
+                              border: '1px solid #303647',
+                              background: '#0b0e16',
+                              color: '#ffffff'
+                            }}
+                        />
+
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                          maxHeight: '420px',
+                          overflowY: 'auto'
+                        }}>
+                          {filteredFiles.map(file => (
+                              <button
+                                  key={file.path}
+                                  onClick={() => void openFile(file.path)}
+                                  style={{
+                                    textAlign: 'left',
+                                    padding: '10px',
+                                    borderRadius: '6px',
+                                    border: '1px solid',
+                                    borderColor: selectedFile === file.path
+                                        ? '#8b72ef'
+                                        : 'transparent',
+                                    background: selectedFile === file.path
+                                        ? '#25203d'
+                                        : 'transparent',
+                                    color: '#e5e7eb',
+                                    cursor: 'pointer',
+                                    overflowWrap: 'anywhere'
+                                  }}
+                              >
+                                <span style={{ marginRight: '8px' }}>📄</span>
+                                {file.path}
+                              </button>
+                          ))}
+
+                          {filteredFiles.length === 0 && (
+                              <p>No matching files.</p>
+                          )}
+                        </div>
+                      </article>
+
+                      <article className="feature-card" style={{ minWidth: 0 }}>
+                        <h3 style={{ overflowWrap: 'anywhere' }}>
+                          {selectedFile || 'Select a file to preview'}
+                        </h3>
+
+                        {selectedFile && !fileContent && !fileError && (
+                            <p>Loading file contents...</p>
+                        )}
+
+                        {fileContent && (
+                            <pre style={{
+                              marginTop: '16px',
+                              padding: '16px',
+                              borderRadius: '8px',
+                              background: '#090b11',
+                              color: '#d8deeb',
+                              overflow: 'auto',
+                              maxHeight: '520px',
+                              whiteSpace: 'pre',
+                              fontSize: '13px',
+                              lineHeight: 1.6
+                            }}>
+                      <code>{fileContent}</code>
+                    </pre>
+                        )}
+
+                        {!selectedFile && (
+                            <p>Choose a file from the list to view its contents here.</p>
+                        )}
+                      </article>
+                    </div>
+                )}
+              </section>
+          )}
 
           <section className="section">
             <div className="section-heading">

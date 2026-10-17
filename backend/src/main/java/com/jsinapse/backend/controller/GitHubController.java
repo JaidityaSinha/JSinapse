@@ -42,5 +42,14 @@ public class GitHubController {
         return gitHubService.getSourceFiles(owner, repo, branch);
     }
 
+    @GetMapping("/file")
+    public String getFileContent(
+            @RequestParam String owner,
+            @RequestParam String repo,
+            @RequestParam String path) {
+
+        return gitHubService.getFileContent(owner, repo, path);
+    }
+
 
 }

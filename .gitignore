@@ -3,6 +3,7 @@
 backend/target/
 *.class
 *.log
+.env
 
 # Node / React
 frontend/node_modules/
