@@ -163,10 +163,17 @@ export default function CodeGalaxy({
             visibleGraphNodes.map((node) => node.id)
         );
 
+
         const flowNodes: Node[] = visibleGraphNodes.map((node, index) => {
             const angle = index * 2.39996;
             const radius = 100 + Math.sqrt(index) * 75;
             const accent = nodeColors[node.type] ?? "#8493a8";
+
+            const isSelected = node.id === focusNodeId;
+            const isSearchMatch =
+                searchQuery.trim().length > 0 &&
+                (node.name.toLowerCase().includes(searchQuery.trim().toLowerCase()) ||
+                    node.filePath.toLowerCase().includes(searchQuery.trim().toLowerCase()));
 
             return {
                 id: node.id,
@@ -178,17 +185,34 @@ export default function CodeGalaxy({
                     label: node.name,
                 },
                 style: {
-                    background: "#151c27",
+                    background: isSelected
+                        ? "#263b50"
+                        : isSearchMatch
+                            ? "#302b1b"
+                            : "#151c27",
                     color: "#dce3ec",
-                    border: `1px solid ${accent}90`,
+                    border: isSelected
+                        ? "2px solid #ffffff"
+                        : isSearchMatch
+                            ? `2px solid ${accent}`
+                            : `1px solid ${accent}90`,
                     borderRadius: 9,
                     padding: 10,
                     fontSize: 11,
                     width: 160,
-                    boxShadow: `0 3px 12px ${accent}18`,
+                    boxShadow: isSelected
+                        ? "0 0 20px #ffffff55"
+                        : isSearchMatch
+                            ? `0 0 16px ${accent}66`
+                            : `0 3px 12px ${accent}18`,
+                    opacity:
+                        searchQuery.trim().length > 0 && !isSearchMatch && !isSelected
+                            ? 0.45
+                            : 1,
                 },
             };
         });
+
 
         const flowEdges: Edge[] = graph.relationships
             .filter(
@@ -208,7 +232,7 @@ export default function CodeGalaxy({
                     target: relationship.targetId,
                     label: relationship.type,
                     type: "default",
-                    animated: isCall,
+                    animated: false,
                     style: {
                         stroke: isCall
                             ? "#81b9b5"
