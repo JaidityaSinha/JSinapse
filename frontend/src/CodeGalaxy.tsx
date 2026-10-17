@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
     Background,
@@ -99,6 +98,37 @@ export default function CodeGalaxy({
     );
     const [showAll, setShowAll] = useState(false);
     const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
+
+    // Search state
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchOpen, setSearchOpen] = useState(false);
+
+    const searchResults = useMemo(() => {
+        const query = searchQuery.trim().toLowerCase();
+
+        if (!query) return [];
+
+        return graph.nodes
+            .filter(
+                (node) =>
+                    node.name.toLowerCase().includes(query) ||
+                    node.filePath.toLowerCase().includes(query)
+            )
+            .slice(0, 10);
+    }, [graph.nodes, searchQuery]);
+
+    const handleSearchSelect = (node: GraphNode) => {
+        setShowAll(true);
+        setExpandedIds((previous) => {
+            const next = new Set(previous);
+            next.add(node.id);
+            return next;
+        });
+        setPendingFocusId(node.id);
+        onSelectNode?.(node);
+        setSearchQuery(node.name);
+        setSearchOpen(false);
+    };
 
     const visibleGraphNodes = useMemo(() => {
         if (showAll) return graph.nodes;
@@ -231,6 +261,8 @@ export default function CodeGalaxy({
         setExpandedIds(new Set());
         setShowAll(false);
         setPendingFocusId(null);
+        setSearchQuery("");
+        setSearchOpen(false);
     };
 
     const handleShowAll = () => {
@@ -267,6 +299,144 @@ export default function CodeGalaxy({
 
     return (
         <div>
+            {/* Graph search */}
+            <div
+                style={{
+                    position: "relative",
+                    marginBottom: 14,
+                    maxWidth: 480,
+                }}
+            >
+                <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(event) => {
+                        setSearchQuery(event.target.value);
+                        setSearchOpen(true);
+                    }}
+                    onFocus={() => setSearchOpen(true)}
+                    onBlur={() => {
+                        // Delay closing so a result can receive its click.
+                        window.setTimeout(() => setSearchOpen(false), 150);
+                    }}
+                    onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                            setSearchOpen(false);
+                        } else if (
+                            event.key === "Enter" &&
+                            searchResults.length > 0
+                        ) {
+                            handleSearchSelect(searchResults[0]);
+                        }
+                    }}
+                    placeholder="Search classes, methods, files..."
+                    aria-label="Search code graph"
+                    style={{
+                        width: "100%",
+                        boxSizing: "border-box",
+                        padding: "11px 14px",
+                        borderRadius: 10,
+                        border: "1px solid #344357",
+                        background: "#111923",
+                        color: "#e2e8f0",
+                        fontSize: 12,
+                        outline: "none",
+                    }}
+                />
+
+                {searchOpen && searchQuery.trim() !== "" && (
+                    <div
+                        style={{
+                            position: "absolute",
+                            top: "calc(100% + 6px)",
+                            left: 0,
+                            right: 0,
+                            zIndex: 20,
+                            maxHeight: 300,
+                            overflowY: "auto",
+                            border: "1px solid #344357",
+                            borderRadius: 10,
+                            background: "#111923",
+                            boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+                        }}
+                    >
+                        {searchResults.length > 0 ? (
+                            searchResults.map((node) => (
+                                <button
+                                    key={node.id}
+                                    type="button"
+                                    onMouseDown={(event) => {
+                                        event.preventDefault();
+                                        handleSearchSelect(node);
+                                    }}
+                                    style={{
+                                        display: "block",
+                                        width: "100%",
+                                        padding: "10px 12px",
+                                        border: "none",
+                                        borderBottom: "1px solid #263343",
+                                        background: "transparent",
+                                        color: "#dce3ec",
+                                        textAlign: "left",
+                                        cursor: "pointer",
+                                    }}
+                                >
+                                    <div
+                                        style={{
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                color:
+                                                    nodeColors[node.type] ??
+                                                    "#8493a8",
+                                                marginRight: 8,
+                                            }}
+                                        >
+                                            ●
+                                        </span>
+                                        {node.name}
+                                        <span
+                                            style={{
+                                                float: "right",
+                                                color: "#8190a4",
+                                                fontSize: 10,
+                                            }}
+                                        >
+                                            {node.type}
+                                        </span>
+                                    </div>
+
+                                    <div
+                                        style={{
+                                            marginTop: 4,
+                                            color: "#8190a4",
+                                            fontSize: 10,
+                                            overflowWrap: "anywhere",
+                                        }}
+                                    >
+                                        {node.filePath}
+                                    </div>
+                                </button>
+                            ))
+                        ) : (
+                            <div
+                                style={{
+                                    padding: 12,
+                                    color: "#8190a4",
+                                    fontSize: 12,
+                                }}
+                            >
+                                No matching nodes found.
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* Existing legend and graph controls */}
             <div
                 style={{
                     display: "flex",
@@ -285,7 +455,6 @@ export default function CodeGalaxy({
                         alignItems: "center",
                     }}
                 >
-
                     {[
                         ["Classes", "#c084fc"],
                         ["Methods", "#34d399"],
@@ -303,20 +472,19 @@ export default function CodeGalaxy({
                                 fontWeight: 500,
                             }}
                         >
-        <span
-            style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: color,
-                boxShadow: `0 0 8px ${color}66`,
-                flexShrink: 0,
-            }}
-        />
+                            <span
+                                style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: "50%",
+                                    background: color,
+                                    boxShadow: `0 0 8px ${color}66`,
+                                    flexShrink: 0,
+                                }}
+                            />
                             {label}
                         </div>
                     ))}
-
                 </div>
 
                 <div
