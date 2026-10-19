@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import CodeGalaxy, { type CodeGraph, type GraphNode } from './CodeGalaxy'
 
@@ -34,6 +34,9 @@ function App() {
   const [sourceFiles, setSourceFiles] = useState<SourceFile[]>([])
   const [selectedFile, setSelectedFile] = useState('')
   const [fileContent, setFileContent] = useState('')
+  const [fileContentLoading, setFileContentLoading] = useState(false)
+  const fileRequestId = useRef(0)
+  const graphRequestId = useRef(0)
   const [fileSearch, setFileSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [filesLoading, setFilesLoading] = useState(false)
@@ -159,6 +162,10 @@ function App() {
     setSourceFiles([])
     setSelectedFile('')
     setFileContent('')
+    setFileContentLoading(false)
+    fileRequestId.current += 1
+    graphRequestId.current += 1
+    setGraphLoading(false)
     setGraph(null)
     setSelectedNode(null)
     setCallChain(null)
@@ -243,9 +250,11 @@ function App() {
     const [owner, repo] = repository.full_name.split('/')
     if (!owner || !repo) return
 
+    const requestId = ++fileRequestId.current
     setSelectedFile(path)
     setFileContent('')
     setFileError('')
+    setFileContentLoading(true)
 
     try {
       const response = await fetch(
@@ -256,11 +265,20 @@ function App() {
         throw new Error(`Could not load file (${response.status}).`)
       }
 
-      setFileContent(await response.text())
+      const content = await response.text()
+      if (requestId === fileRequestId.current) {
+        setFileContent(content)
+      }
     } catch (err) {
-      setFileError(
-          err instanceof Error ? err.message : 'Could not load this file.'
-      )
+      if (requestId === fileRequestId.current) {
+        setFileError(
+            err instanceof Error ? err.message : 'Could not load this file.'
+        )
+      }
+    } finally {
+      if (requestId === fileRequestId.current) {
+        setFileContentLoading(false)
+      }
     }
   }
 
@@ -274,6 +292,7 @@ function App() {
     const [owner, repo] = repository.full_name.split('/')
     if (!owner || !repo) return
 
+    const requestId = ++graphRequestId.current
     setGraphLoading(true)
 
     try {
@@ -290,15 +309,21 @@ function App() {
       }
 
       const data: CodeGraph = await response.json()
-      setGraph(data)
+      if (requestId === graphRequestId.current) {
+        setGraph(data)
+      }
     } catch (err) {
-      setGraphError(
-          err instanceof Error
-              ? err.message
-              : 'Could not generate the code graph.'
-      )
+      if (requestId === graphRequestId.current) {
+        setGraphError(
+            err instanceof Error
+                ? err.message
+                : 'Could not generate the code graph.'
+        )
+      }
     } finally {
-      setGraphLoading(false)
+      if (requestId === graphRequestId.current) {
+        setGraphLoading(false)
+      }
     }
   }
 
@@ -519,6 +544,7 @@ function App() {
                             <CodeGalaxy
                                 graph={graph}
                                 onSelectNode={setSelectedNode}
+                                focusNodeId={selectedNode?.id ?? null}
                             />
 
                             {selectedNode && (
@@ -879,11 +905,11 @@ function App() {
                                 {selectedFile || 'Select a file to preview'}
                               </h3>
 
-                              {selectedFile && !fileContent && !fileError && (
+                              {selectedFile && fileContentLoading && !fileError && (
                                   <p>Loading file contents...</p>
                               )}
 
-                              {fileContent && (
+                              {!fileContentLoading && fileContent !== '' && (
                                   <pre
                                       style={{
                                         marginTop: '16px',
@@ -900,6 +926,10 @@ function App() {
                                   >
                           <code>{fileContent}</code>
                         </pre>
+                              )}
+
+                              {selectedFile && !fileContentLoading && !fileError && fileContent === '' && (
+                                  <p>This file is empty.</p>
                               )}
 
                               {!selectedFile && (

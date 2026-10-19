@@ -148,6 +148,86 @@ class JavaLanguageParserTests {
         assertEquals(Set.of("method:src/Root.java:Root:work()"), calls);
     }
 
+    @Test
+    void detectsMethodsOverridingInheritedMethods() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("src/Dog.java", "class Dog extends Animal { @Override void speak() {} }");
+        files.put("src/Animal.java", "class Animal { void speak() {} }");
+
+        CodeGraph graph = parser.parse(files);
+        Set<String> overrides = graph.relationships().stream()
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.OVERRIDES)
+                .filter(edge -> edge.sourceId().equals("method:src/Dog.java:Dog:speak()"))
+                .map(CodeRelationship::targetId)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of("method:src/Animal.java:Animal:speak()"), overrides);
+    }
+
+    @Test
+    void detectsOverrideOfMethodSeveralLevelsUp() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("src/Leaf.java", "class Leaf extends Middle { @Override void work() {} }");
+        files.put("src/Middle.java", "class Middle extends Root {}");
+        files.put("src/Root.java", "class Root { void work() {} }");
+
+        CodeGraph graph = parser.parse(files);
+        Set<String> overrides = graph.relationships().stream()
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.OVERRIDES)
+                .filter(edge -> edge.sourceId().equals("method:src/Leaf.java:Leaf:work()"))
+                .map(CodeRelationship::targetId)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of("method:src/Root.java:Root:work()"), overrides);
+    }
+
+
+    @Test
+    void identifiesPossibleRuntimeImplementationsForPolymorphicCalls() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("src/Animal.java", "class Animal { void speak() {} }");
+        files.put("src/Dog.java", "class Dog extends Animal { @Override void speak() {} }");
+        files.put("src/Cat.java", "class Cat extends Animal { @Override void speak() {} }");
+        files.put("src/Caller.java", "class Caller { void run(Animal animal) { animal.speak(); } }");
+
+        CodeGraph graph = parser.parse(files);
+        String callerMethod = "method:src/Caller.java:Caller:run(Animal)";
+
+        Set<String> declaredCalls = graph.relationships().stream()
+                .filter(edge -> edge.sourceId().equals(callerMethod))
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.CALLS)
+                .map(CodeRelationship::targetId)
+                .collect(Collectors.toSet());
+        Set<String> dispatchTargets = graph.relationships().stream()
+                .filter(edge -> edge.sourceId().equals(callerMethod))
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.DISPATCHES_TO)
+                .map(CodeRelationship::targetId)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of("method:src/Animal.java:Animal:speak()"), declaredCalls);
+        assertEquals(Set.of(
+                "method:src/Dog.java:Dog:speak()",
+                "method:src/Cat.java:Cat:speak()"
+        ), dispatchTargets);
+    }
+
+    @Test
+    void findsPolymorphicImplementationsOfInterfaceMethods() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("src/Speaker.java", "interface Speaker { void speak(); }");
+        files.put("src/Dog.java", "class Dog implements Speaker { public void speak() {} }");
+        files.put("src/Caller.java", "class Caller { void run(Speaker speaker) { speaker.speak(); } }");
+
+        CodeGraph graph = parser.parse(files);
+        Set<String> dispatchTargets = graph.relationships().stream()
+                .filter(edge -> edge.sourceId().equals("method:src/Caller.java:Caller:run(Speaker)"))
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.DISPATCHES_TO)
+                .map(CodeRelationship::targetId)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of("method:src/Dog.java:Dog:speak()"), dispatchTargets);
+    }
+
     private Set<String> callsFrom(CodeGraph graph, String sourceId) {
         return graph.relationships().stream()
                 .filter(edge -> edge.sourceId().equals(sourceId))

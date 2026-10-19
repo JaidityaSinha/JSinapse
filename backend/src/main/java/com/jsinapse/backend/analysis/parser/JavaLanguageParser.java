@@ -234,6 +234,7 @@ public class JavaLanguageParser implements LanguageParser {
         // Build the inheritance index before resolving calls so resolution does not
         // depend on the order in which repository files are supplied.
         Map<String, List<String>> parentTypesByClass = new LinkedHashMap<>();
+        Set<String> concreteTypes = new LinkedHashSet<>();
         for (Map.Entry<String, CompilationUnit> entry : compilationUnits.entrySet()) {
             CompilationUnit unit = entry.getValue();
             String packageName = unit.getPackageDeclaration()
@@ -248,6 +249,9 @@ public class JavaLanguageParser implements LanguageParser {
                 String typeName = declaration.getNameAsString();
                 String qualifiedName = packageName.isEmpty()
                         ? typeName : packageName + "." + typeName;
+                if (!declaration.isInterface() && !declaration.isAbstract()) {
+                    concreteTypes.add(qualifiedName);
+                }
                 List<String> parents = new ArrayList<>();
 
                 declaration.getExtendedTypes().forEach(parent -> {
@@ -261,6 +265,51 @@ public class JavaLanguageParser implements LanguageParser {
                     if (resolved != null) parents.add(resolved);
                 });
                 parentTypesByClass.put(qualifiedName, parents);
+            }
+        }
+
+        // Identify overrides using exact parameter signatures across ancestors.
+        // The edge points from the overriding method to the inherited declaration.
+        for (Map.Entry<String, CompilationUnit> entry : compilationUnits.entrySet()) {
+            String filePath = entry.getKey();
+            CompilationUnit unit = entry.getValue();
+            String packageName = unit.getPackageDeclaration()
+                    .map(declaration -> declaration.getNameAsString())
+                    .orElse("");
+
+            for (TypeDeclaration<?> type : unit.getTypes()) {
+                if (!(type instanceof ClassOrInterfaceDeclaration declaration)) {
+                    continue;
+                }
+                String typeName = declaration.getNameAsString();
+                String qualifiedName = packageName.isEmpty()
+                        ? typeName : packageName + "." + typeName;
+
+                for (MethodDeclaration method : declaration.getMethods()) {
+                    // Static methods hide rather than override; private methods are not inherited.
+                    if (method.isStatic() || method.isPrivate()) {
+                        continue;
+                    }
+
+                    String methodName = method.getNameAsString();
+                    String parameterTypes = method.getParameters().stream()
+                            .map(parameter -> normalizeTypeName(parameter.getType().asString()))
+                            .collect(java.util.stream.Collectors.joining(","));
+                    String methodId = "method:" + filePath + ":" + typeName + ":"
+                            + methodName + "(" + parameterTypes + ")";
+
+                    Set<String> ancestorMatches = new LinkedHashSet<>();
+                    collectOverriddenMethods(qualifiedName, methodName, parameterTypes,
+                            parentTypesByClass, methodIds, new LinkedHashSet<>(), ancestorMatches);
+
+                    for (String ancestorMethodId : ancestorMatches) {
+                        relationships.add(new CodeRelationship(
+                                methodId,
+                                CodeRelationship.RelationshipType.OVERRIDES,
+                                ancestorMethodId
+                        ));
+                    }
+                }
             }
         }
 
@@ -384,6 +433,13 @@ public class JavaLanguageParser implements LanguageParser {
 
                     Map<String, String> localVariableTypes = new LinkedHashMap<>();
 
+                    method.getParameters().forEach(parameter ->
+                            localVariableTypes.put(
+                                    parameter.getNameAsString(),
+                                    parameter.getType().asString()
+                            )
+                    );
+
                     method.findAll(VariableDeclarator.class).forEach(variable ->
                             localVariableTypes.put(
                                     variable.getNameAsString(),
@@ -401,6 +457,7 @@ public class JavaLanguageParser implements LanguageParser {
                                 ))
                                 .toList();
                         String targetId = null;
+                        String receiverType = null;
 
                         if (call.getScope().isEmpty()) {
                             targetId = resolveMethodId(
@@ -451,12 +508,20 @@ public class JavaLanguageParser implements LanguageParser {
                                 );
 
                                 if (targetType != null) {
+                                    receiverType = targetType;
                                     targetId = resolveMethodId(
                                             targetType,
                                             calledName,
                                             argumentTypes,
                                             methodIds
                                     );
+                                    if (targetId == null) {
+                                        targetId = resolveInheritedMethodId(
+                                                targetType, calledName, argumentTypes,
+                                                methodIds, parentTypesByClass,
+                                                new LinkedHashSet<>()
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -468,12 +533,119 @@ public class JavaLanguageParser implements LanguageParser {
                                     targetId
                             ));
                         }
+
+                        if (receiverType != null && targetId != null) {
+                            Set<String> dispatchTargets = findPolymorphicTargets(
+                                    receiverType, calledName, argumentTypes,
+                                    targetId, concreteTypes, parentTypesByClass, methodIds,
+                                    relationships
+                            );
+                            for (String dispatchTarget : dispatchTargets) {
+                                boolean alreadyAdded = relationships.stream().anyMatch(edge ->
+                                        edge.sourceId().equals(methodId)
+                                                && edge.type() == CodeRelationship.RelationshipType.DISPATCHES_TO
+                                                && edge.targetId().equals(dispatchTarget));
+                                if (!alreadyAdded) {
+                                    relationships.add(new CodeRelationship(
+                                            methodId,
+                                            CodeRelationship.RelationshipType.DISPATCHES_TO,
+                                            dispatchTarget
+                                    ));
+                                }
+                            }
+                        }
                     });
                 }
             }
         }
 
         return new CodeGraph(nodes, relationships);
+    }
+
+    private Set<String> findPolymorphicTargets(
+            String staticType,
+            String methodName,
+            List<String> argumentTypes,
+            String declaredTargetId,
+            Set<String> concreteTypes,
+            Map<String, List<String>> parentTypesByClass,
+            Map<String, String> methodIds,
+            List<CodeRelationship> relationships
+    ) {
+        Set<String> targets = new LinkedHashSet<>();
+        for (String candidateType : concreteTypes) {
+            if (!isSubtypeOf(candidateType, staticType, parentTypesByClass,
+                    new LinkedHashSet<>())) {
+                continue;
+            }
+
+            String candidateMethod = resolveMethodId(
+                    candidateType, methodName, argumentTypes, methodIds
+            );
+            if (candidateMethod == null) {
+                candidateMethod = resolveInheritedMethodId(
+                        candidateType, methodName, argumentTypes, methodIds,
+                        parentTypesByClass, new LinkedHashSet<>()
+                );
+            }
+
+            // Only emit a dispatch edge when the runtime implementation differs
+            // from the method resolved from the receiver's declared type.
+            if (candidateMethod != null && !candidateMethod.equals(declaredTargetId)) {
+                String resolvedCandidateMethod = candidateMethod;
+                boolean overridesDeclaredTarget = relationships.stream().anyMatch(edge ->
+                        edge.type() == CodeRelationship.RelationshipType.OVERRIDES
+                                && edge.sourceId().equals(resolvedCandidateMethod)
+                                && edge.targetId().equals(declaredTargetId));
+                if (overridesDeclaredTarget) {
+                    targets.add(resolvedCandidateMethod);
+                }
+            }
+        }
+        return targets;
+    }
+
+    private boolean isSubtypeOf(
+            String candidateType,
+            String expectedParentType,
+            Map<String, List<String>> parentTypesByClass,
+            Set<String> visitedTypes
+    ) {
+        if (!visitedTypes.add(candidateType)) {
+            return false;
+        }
+        for (String parentType : parentTypesByClass.getOrDefault(candidateType, List.of())) {
+            if (parentType.equals(expectedParentType)
+                    || isSubtypeOf(parentType, expectedParentType,
+                    parentTypesByClass, visitedTypes)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void collectOverriddenMethods(
+            String qualifiedTypeName,
+            String methodName,
+            String parameterTypes,
+            Map<String, List<String>> parentTypesByClass,
+            Map<String, String> methodIds,
+            Set<String> visitedTypes,
+            Set<String> matches
+    ) {
+        if (!visitedTypes.add(qualifiedTypeName)) {
+            return;
+        }
+
+        for (String parentType : parentTypesByClass.getOrDefault(qualifiedTypeName, List.of())) {
+            String parentMethodId = methodIds.get(
+                    parentType + ":" + methodName + ":" + parameterTypes);
+            if (parentMethodId != null) {
+                matches.add(parentMethodId);
+            }
+            collectOverriddenMethods(parentType, methodName, parameterTypes,
+                    parentTypesByClass, methodIds, visitedTypes, matches);
+        }
     }
 
     private String resolveInheritedMethodId(

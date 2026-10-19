@@ -37,6 +37,18 @@ type Props = {
     focusNodeId?: string | null;
 };
 
+const relationshipColors: Record<string, string> = {
+    CONTAINS: "#64748b",
+    IMPORTS: "#94a3b8",
+    CALLS: "#81b9b5",
+    EXTENDS: "#c084fc",
+    IMPLEMENTS: "#f472b6",
+    REFERENCES: "#60a5fa",
+    DEPENDS_ON: "#fbbf24",
+    OVERRIDES: "#fb923c",
+    DISPATCHES_TO: "#f87171",
+};
+
 const nodeColors: Record<string, string> = {
     FILE: "#60a5fa",
     CLASS: "#c084fc",
@@ -92,6 +104,22 @@ export default function CodeGalaxy({
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchOpen, setSearchOpen] = useState(false);
+    const [visibleRelationshipTypes, setVisibleRelationshipTypes] = useState<Set<string>>(
+        () => new Set([
+            "CONTAINS", "IMPORTS", "CALLS", "EXTENDS", "IMPLEMENTS",
+            "REFERENCES", "DEPENDS_ON", "OVERRIDES", "DISPATCHES_TO",
+        ])
+    );
+
+    const availableRelationshipTypes = useMemo(
+        () => Array.from(new Set(graph.relationships.map((relationship) => relationship.type))).sort(),
+        [graph.relationships]
+    );
+
+    const filteredRelationships = useMemo(
+        () => graph.relationships.filter((relationship) => visibleRelationshipTypes.has(relationship.type)),
+        [graph.relationships, visibleRelationshipTypes]
+    );
 
     const searchResults = useMemo(() => {
         const query = searchQuery.trim().toLowerCase();
@@ -131,7 +159,7 @@ export default function CodeGalaxy({
         expandedIds.forEach((id) => {
             visibleIds.add(id);
 
-            graph.relationships.forEach((relationship) => {
+            filteredRelationships.forEach((relationship) => {
                 if (relationship.sourceId === id) {
                     visibleIds.add(relationship.targetId);
                 }
@@ -143,9 +171,9 @@ export default function CodeGalaxy({
         });
 
         return graph.nodes.filter((node) => visibleIds.has(node.id));
-    }, [graph, expandedIds, showAll]);
+    }, [graph, filteredRelationships, expandedIds, showAll]);
 
-    const activeNodeId = selectedNodeId ?? focusNodeId ?? null;
+    const activeNodeId = focusNodeId ?? selectedNodeId ?? null;
 
     const { nodes, edges } = useMemo(() => {
         const visibleIds = new Set(
@@ -157,7 +185,7 @@ export default function CodeGalaxy({
         if (activeNodeId) {
             connectedNodeIds.add(activeNodeId);
 
-            graph.relationships.forEach((relationship) => {
+            filteredRelationships.forEach((relationship) => {
                 if (relationship.sourceId === activeNodeId) {
                     connectedNodeIds.add(relationship.targetId);
                 }
@@ -225,17 +253,18 @@ export default function CodeGalaxy({
             };
         });
 
-        const flowEdges: Edge[] = graph.relationships
+        const flowEdges: Edge[] = filteredRelationships
             .filter(
                 (relationship) =>
                     visibleIds.has(relationship.sourceId) &&
                     visibleIds.has(relationship.targetId)
             )
-            .map((relationship, index) => {
+            .map((relationship) => {
                 const isCall = relationship.type === "CALLS";
-                const isInheritance =
-                    relationship.type === "EXTENDS" ||
-                    relationship.type === "IMPLEMENTS";
+                const isInheritance = relationship.type === "EXTENDS" || relationship.type === "IMPLEMENTS";
+                const isOverride = relationship.type === "OVERRIDES";
+                const isDispatch = relationship.type === "DISPATCHES_TO";
+                const relationshipColor = relationshipColors[relationship.type] ?? "#465363";
 
                 const isConnectedEdge =
                     !!activeNodeId &&
@@ -246,26 +275,17 @@ export default function CodeGalaxy({
                     hasConnectedSelection && !isConnectedEdge;
 
                 return {
-                    id: `edge-${index}`,
+                    id: `edge-${relationship.sourceId}-${relationship.type}-${relationship.targetId}`,
                     source: relationship.sourceId,
                     target: relationship.targetId,
                     label: relationship.type,
                     type: "default",
                     animated: false,
                     style: {
-                        stroke: isConnectedEdge
-                            ? "#ffffff"
-                            : isCall
-                                ? "#81b9b5"
-                                : isInheritance
-                                    ? "#c084fc"
-                                    : "#465363",
-                        strokeWidth: isConnectedEdge
-                            ? 2.5
-                            : isCall
-                                ? 1.6
-                                : 1,
-                        opacity: isDimmedEdge ? 0.08 : 0.75,
+                        stroke: isConnectedEdge ? "#ffffff" : relationshipColor,
+                        strokeWidth: isConnectedEdge ? 2.5 : isCall || isOverride || isDispatch ? 1.8 : isInheritance ? 1.4 : 1,
+                        strokeDasharray: isDispatch ? "6 4" : isOverride ? "3 3" : undefined,
+                        opacity: isDimmedEdge ? 0.08 : 0.82,
                     },
                     labelStyle: {
                         fill: isConnectedEdge ? "#ffffff" : "#9ba9ba",
@@ -281,7 +301,7 @@ export default function CodeGalaxy({
         return { nodes: flowNodes, edges: flowEdges };
     }, [
         visibleGraphNodes,
-        graph.relationships,
+        filteredRelationships,
         activeNodeId,
         searchQuery,
     ]);
@@ -310,6 +330,7 @@ export default function CodeGalaxy({
         setSelectedNodeId(null);
         setSearchQuery("");
         setSearchOpen(false);
+        setVisibleRelationshipTypes(new Set(availableRelationshipTypes));
     };
 
     const handleShowAll = () => {
@@ -558,6 +579,58 @@ export default function CodeGalaxy({
                     </button>
                 </div>
             </div>
+
+
+            {availableRelationshipTypes.length > 0 && (
+                <div
+                    style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        gap: 7,
+                        marginBottom: 14,
+                        padding: "10px 12px",
+                        border: "1px solid #263548",
+                        borderRadius: 10,
+                        background: "rgba(13, 19, 28, 0.72)",
+                    }}
+                >
+                    <span style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginRight: 4 }}>
+                        RELATIONSHIPS
+                    </span>
+                    {availableRelationshipTypes.map((type) => {
+                        const active = visibleRelationshipTypes.has(type);
+                        const color = relationshipColors[type] ?? "#8493a8";
+                        return (
+                            <button
+                                key={type}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => setVisibleRelationshipTypes((previous) => {
+                                    const next = new Set(previous);
+                                    if (next.has(type)) next.delete(type);
+                                    else next.add(type);
+                                    return next;
+                                })}
+                                style={{
+                                    ...buttonStyle,
+                                    padding: "5px 8px",
+                                    fontSize: 10,
+                                    color: active ? color : "#64748b",
+                                    borderColor: active ? `${color}99` : "#263343",
+                                    background: active ? `${color}14` : "#111923",
+                                    opacity: active ? 1 : 0.72,
+                                }}
+                            >
+                                {active ? "●" : "○"} {type.replace(/_/g, " ")}
+                            </button>
+                        );
+                    })}
+                    <span style={{ color: "#64748b", fontSize: 10, marginLeft: "auto" }}>
+                        {filteredRelationships.length} / {graph.relationships.length} edges
+                    </span>
+                </div>
+            )}
 
             <div
                 style={{

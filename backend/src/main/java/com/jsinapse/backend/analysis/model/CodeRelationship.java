@@ -13,6 +13,8 @@ public record CodeRelationship(
         EXTENDS,
         IMPLEMENTS,
         REFERENCES,
-        DEPENDS_ON
+        DEPENDS_ON,
+        OVERRIDES,
+        DISPATCHES_TO
     }
 }
