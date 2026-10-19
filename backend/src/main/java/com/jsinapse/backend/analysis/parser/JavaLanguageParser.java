@@ -231,6 +231,39 @@ public class JavaLanguageParser implements LanguageParser {
             }
         }
 
+        // Build the inheritance index before resolving calls so resolution does not
+        // depend on the order in which repository files are supplied.
+        Map<String, List<String>> parentTypesByClass = new LinkedHashMap<>();
+        for (Map.Entry<String, CompilationUnit> entry : compilationUnits.entrySet()) {
+            CompilationUnit unit = entry.getValue();
+            String packageName = unit.getPackageDeclaration()
+                    .map(declaration -> declaration.getNameAsString())
+                    .orElse("");
+
+            for (TypeDeclaration<?> type : unit.getTypes()) {
+                if (!(type instanceof ClassOrInterfaceDeclaration declaration)) {
+                    continue;
+                }
+
+                String typeName = declaration.getNameAsString();
+                String qualifiedName = packageName.isEmpty()
+                        ? typeName : packageName + "." + typeName;
+                List<String> parents = new ArrayList<>();
+
+                declaration.getExtendedTypes().forEach(parent -> {
+                    String resolved = resolveTypeName(parent.getNameAsString(),
+                            packageName, unit, typeIds, simpleTypeIds);
+                    if (resolved != null) parents.add(resolved);
+                });
+                declaration.getImplementedTypes().forEach(parent -> {
+                    String resolved = resolveTypeName(parent.getNameAsString(),
+                            packageName, unit, typeIds, simpleTypeIds);
+                    if (resolved != null) parents.add(resolved);
+                });
+                parentTypesByClass.put(qualifiedName, parents);
+            }
+        }
+
         // Pass 2: resolve inheritance and method calls.
         for (Map.Entry<String, CompilationUnit> entry
                 : compilationUnits.entrySet()) {
@@ -371,11 +404,14 @@ public class JavaLanguageParser implements LanguageParser {
 
                         if (call.getScope().isEmpty()) {
                             targetId = resolveMethodId(
-                                    qualifiedName,
-                                    calledName,
-                                    argumentTypes,
-                                    methodIds
+                                    qualifiedName, calledName, argumentTypes, methodIds
                             );
+                            if (targetId == null) {
+                                targetId = resolveInheritedMethodId(
+                                        qualifiedName, calledName, argumentTypes,
+                                        methodIds, parentTypesByClass, new LinkedHashSet<>()
+                                );
+                            }
                         } else {
                             String scopeName = call.getScope().get().toString();
 
@@ -387,7 +423,10 @@ public class JavaLanguageParser implements LanguageParser {
                                         methodIds
                                 );
                             } else if (scopeName.equals("super")) {
-                                // Parent method resolution will be added later.
+                                targetId = resolveFromDirectParents(
+                                        qualifiedName, calledName, argumentTypes,
+                                        methodIds, parentTypesByClass
+                                );
                             } else {
                                 String fieldType = localVariableTypes.get(scopeName);
 
@@ -435,6 +474,57 @@ public class JavaLanguageParser implements LanguageParser {
         }
 
         return new CodeGraph(nodes, relationships);
+    }
+
+    private String resolveInheritedMethodId(
+            String qualifiedTypeName,
+            String methodName,
+            List<String> argumentTypes,
+            Map<String, String> methodIds,
+            Map<String, List<String>> parentTypesByClass,
+            Set<String> visitedTypes
+    ) {
+        if (!visitedTypes.add(qualifiedTypeName)) {
+            return null;
+        }
+
+        for (String parentType : parentTypesByClass.getOrDefault(qualifiedTypeName, List.of())) {
+            String match = resolveMethodId(parentType, methodName, argumentTypes, methodIds);
+            if (match != null) {
+                return match;
+            }
+        }
+
+        for (String parentType : parentTypesByClass.getOrDefault(qualifiedTypeName, List.of())) {
+            String match = resolveInheritedMethodId(parentType, methodName, argumentTypes,
+                    methodIds, parentTypesByClass, visitedTypes);
+            if (match != null) {
+                return match;
+            }
+        }
+        return null;
+    }
+
+    private String resolveFromDirectParents(
+            String qualifiedTypeName,
+            String methodName,
+            List<String> argumentTypes,
+            Map<String, String> methodIds,
+            Map<String, List<String>> parentTypesByClass
+    ) {
+        String bestMatch = null;
+        for (String parentType : parentTypesByClass.getOrDefault(qualifiedTypeName, List.of())) {
+            String match = resolveMethodId(parentType, methodName, argumentTypes, methodIds);
+            if (match == null) {
+                match = resolveInheritedMethodId(parentType, methodName, argumentTypes,
+                        methodIds, parentTypesByClass, new LinkedHashSet<>());
+            }
+            if (match != null) {
+                if (bestMatch != null && !bestMatch.equals(match)) return null;
+                bestMatch = match;
+            }
+        }
+        return bestMatch;
     }
 
     private String resolveMethodId(
