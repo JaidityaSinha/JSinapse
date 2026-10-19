@@ -1,5 +1,5 @@
 
-package com.jsinapse.backend.analysis;
+package com.jsinapse.backend.service;
 
 import com.jsinapse.backend.analysis.model.CodeGraph;
 import com.jsinapse.backend.analysis.parser.LanguageParser;

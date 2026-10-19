@@ -1,7 +1,7 @@
 
 package com.jsinapse.backend.controller;
 
-import com.jsinapse.backend.analysis.CodeAnalysisService;
+import com.jsinapse.backend.service.CodeAnalysisService;
 import com.jsinapse.backend.analysis.model.CodeGraph;
 import com.jsinapse.backend.service.GitHubService;
 import org.springframework.web.bind.annotation.GetMapping;

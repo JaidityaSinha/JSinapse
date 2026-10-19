@@ -11,7 +11,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-type GraphNode = {
+export type GraphNode = {
     id: string;
     type: string;
     name: string;
@@ -20,13 +20,13 @@ type GraphNode = {
     endLine: number | null;
 };
 
-type GraphRelationship = {
+export type GraphRelationship = {
     sourceId: string;
     type: string;
     targetId: string;
 };
 
-type CodeGraph = {
+export type CodeGraph = {
     nodes: GraphNode[];
     relationships: GraphRelationship[];
 };
@@ -95,6 +95,7 @@ export default function CodeGalaxy({
 
     const searchResults = useMemo(() => {
         const query = searchQuery.trim().toLowerCase();
+
         if (!query) return [];
 
         return graph.nodes
@@ -327,6 +328,7 @@ export default function CodeGalaxy({
         const exists = graph.nodes.some(
             (node) => node.id === focusNodeId
         );
+
         if (!exists) return;
 
         setSelectedNodeId(focusNodeId);
@@ -342,7 +344,6 @@ export default function CodeGalaxy({
 
     return (
         <div>
-            {/* Graph search */}
             <div
                 style={{
                     position: "relative",
@@ -477,7 +478,6 @@ export default function CodeGalaxy({
                 )}
             </div>
 
-            {/* Legend and graph controls */}
             <div
                 style={{
                     display: "flex",
@@ -559,7 +559,6 @@ export default function CodeGalaxy({
                 </div>
             </div>
 
-            {/* Graph canvas */}
             <div
                 style={{
                     position: "relative",
@@ -590,7 +589,6 @@ export default function CodeGalaxy({
                     <Background color="#344255" gap={24} size={1} />
                     <Controls />
 
-                    {/* Graph overview and minimap */}
                     <div
                         style={{
                             position: "absolute",

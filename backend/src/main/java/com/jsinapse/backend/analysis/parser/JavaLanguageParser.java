@@ -11,14 +11,20 @@ import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.type.Type;
 import com.jsinapse.backend.analysis.model.CodeGraph;
 import com.jsinapse.backend.analysis.model.CodeNode;
 import com.jsinapse.backend.analysis.model.CodeRelationship;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.body.ConstructorDeclaration;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class JavaLanguageParser implements LanguageParser {
 
@@ -40,22 +46,21 @@ public class JavaLanguageParser implements LanguageParser {
         Map<String, String> typeIds = new LinkedHashMap<>();
         Map<String, String> simpleTypeIds = new LinkedHashMap<>();
         Map<String, String> methodIds = new LinkedHashMap<>();
-
+        Map<String, String> constructorIds = new LinkedHashMap<>();
         Map<String, CompilationUnit> compilationUnits = new LinkedHashMap<>();
+        Map<String, Map<String, String>> fieldTypesByClass =
+                new LinkedHashMap<>();
 
         JavaParser parser = new JavaParser(
-                new ParserConfiguration()
-                        .setLanguageLevel(
-                                ParserConfiguration.LanguageLevel.BLEEDING_EDGE
-                        )
+                new ParserConfiguration().setLanguageLevel(
+                        ParserConfiguration.LanguageLevel.BLEEDING_EDGE
+                )
         );
 
-        // First pass: parse files and create file, import, type,
-        // field, and method nodes.
+        // Pass 1: create nodes and register types, methods, and fields.
         for (Map.Entry<String, String> entry : sourceFiles.entrySet()) {
             String filePath = entry.getKey();
             String source = entry.getValue();
-
             String fileId = "file:" + filePath;
 
             nodes.add(new CodeNode(
@@ -68,7 +73,6 @@ public class JavaLanguageParser implements LanguageParser {
             ));
 
             ParseResult<CompilationUnit> result = parser.parse(source);
-
             if (!result.isSuccessful() || result.getResult().isEmpty()) {
                 continue;
             }
@@ -109,7 +113,6 @@ public class JavaLanguageParser implements LanguageParser {
                 String qualifiedName = packageName.isEmpty()
                         ? typeName
                         : packageName + "." + typeName;
-
                 String typeId = "type:" + filePath + ":" + typeName;
 
                 CodeNode.NodeType nodeType = declaration.isInterface()
@@ -127,7 +130,6 @@ public class JavaLanguageParser implements LanguageParser {
 
                 typeIds.put(qualifiedName, typeId);
                 typeIds.put(filePath + ":" + typeName, typeId);
-
                 simpleTypeIds.putIfAbsent(typeName, typeId);
 
                 relationships.add(new CodeRelationship(
@@ -136,15 +138,22 @@ public class JavaLanguageParser implements LanguageParser {
                         typeId
                 ));
 
+                Map<String, String> fieldTypes = new LinkedHashMap<>();
+                fieldTypesByClass.put(qualifiedName, fieldTypes);
+
                 for (FieldDeclaration field : declaration.getFields()) {
+                    Type fieldType = field.getElementType();
+                    String fieldTypeName = fieldType.asString();
+
                     field.getVariables().forEach(variable -> {
+                        String fieldName = variable.getNameAsString();
                         String fieldId = "field:" + filePath + ":"
-                                + typeName + ":" + variable.getNameAsString();
+                                + typeName + ":" + fieldName;
 
                         nodes.add(new CodeNode(
                                 fieldId,
                                 CodeNode.NodeType.FIELD,
-                                variable.getNameAsString(),
+                                fieldName,
                                 filePath,
                                 field.getBegin().map(p -> p.line).orElse(null),
                                 field.getEnd().map(p -> p.line).orElse(null)
@@ -155,6 +164,8 @@ public class JavaLanguageParser implements LanguageParser {
                                 CodeRelationship.RelationshipType.CONTAINS,
                                 fieldId
                         ));
+
+                        fieldTypes.put(fieldName, fieldTypeName);
                     });
                 }
 
@@ -176,12 +187,11 @@ public class JavaLanguageParser implements LanguageParser {
                     ));
 
                     methodIds.put(
-                            qualifiedName + ":" + methodName + ":" + parameterCount,
+                            qualifiedName + ":" + methodName + ":"
+                                    + parameterCount,
                             methodId
                     );
 
-                    // Keep the first matching method as a fallback for
-                    // calls where the argument count cannot be resolved.
                     methodIds.putIfAbsent(
                             qualifiedName + ":" + methodName,
                             methodId
@@ -193,12 +203,40 @@ public class JavaLanguageParser implements LanguageParser {
                             methodId
                     ));
                 }
+
+                for (ConstructorDeclaration constructor : declaration.getConstructors()) {
+                    String constructorName = constructor.getNameAsString();
+                    int parameterCount = constructor.getParameters().size();
+
+                    String constructorId = "constructor:" + filePath + ":"
+                            + typeName + ":" + parameterCount;
+
+                    nodes.add(new CodeNode(
+                            constructorId,
+                            CodeNode.NodeType.METHOD,
+                            constructorName + "(constructor)",
+                            filePath,
+                            constructor.getBegin().map(p -> p.line).orElse(null),
+                            constructor.getEnd().map(p -> p.line).orElse(null)
+                    ));
+
+                    constructorIds.put(
+                            qualifiedName + ":" + parameterCount,
+                            constructorId
+                    );
+
+                    relationships.add(new CodeRelationship(
+                            typeId,
+                            CodeRelationship.RelationshipType.CONTAINS,
+                            constructorId
+                    ));
+                }
             }
         }
 
-        // Second pass: resolve inheritance, implementations, and method calls
-        // after all nodes have been registered.
-        for (Map.Entry<String, CompilationUnit> entry : compilationUnits.entrySet()) {
+        // Pass 2: resolve inheritance and method calls.
+        for (Map.Entry<String, CompilationUnit> entry
+                : compilationUnits.entrySet()) {
             String filePath = entry.getKey();
             CompilationUnit unit = entry.getValue();
 
@@ -215,7 +253,6 @@ public class JavaLanguageParser implements LanguageParser {
                 String qualifiedName = packageName.isEmpty()
                         ? typeName
                         : packageName + "." + typeName;
-
                 String typeId = typeIds.get(filePath + ":" + typeName);
 
                 if (typeId == null) {
@@ -256,21 +293,69 @@ public class JavaLanguageParser implements LanguageParser {
                     }
                 });
 
+                Map<String, String> fieldTypes = fieldTypesByClass
+                        .getOrDefault(qualifiedName, Map.of());
+
                 for (MethodDeclaration method : declaration.getMethods()) {
                     String methodId = "method:" + filePath + ":"
-                            + typeName + ":" + method.getNameAsString() + ":"
-                            + method.getParameters().size();
+                            + typeName + ":" + method.getNameAsString()
+                            + ":" + method.getParameters().size();
+
+                    Set<String> resolvedTargets = new LinkedHashSet<>();
+
+                    method.findAll(ObjectCreationExpr.class).forEach(creation -> {
+                        String createdType = creation.getType().getNameAsString();
+                        int argumentCount = creation.getArguments().size();
+
+                        String targetType = resolveTypeName(
+                                createdType,
+                                packageName,
+                                unit,
+                                typeIds,
+                                simpleTypeIds
+                        );
+
+                        if (targetType != null) {
+                            String constructorId = constructorIds.get(
+                                    targetType + ":" + argumentCount
+                            );
+
+                            if (constructorId != null && resolvedTargets.add(constructorId)) {
+                                relationships.add(new CodeRelationship(
+                                        methodId,
+                                        CodeRelationship.RelationshipType.CALLS,
+                                        constructorId
+                                ));
+                            }
+                        }
+                    });
+
+                    Map<String, String> localVariableTypes = new LinkedHashMap<>();
+
+                    method.findAll(VariableDeclarator.class).forEach(variable ->
+                            localVariableTypes.put(
+                                    variable.getNameAsString(),
+                                    variable.getType().asString()
+                            )
+                    );
 
                     method.findAll(MethodCallExpr.class).forEach(call -> {
                         String calledName = call.getNameAsString();
                         int argumentCount = call.getArguments().size();
-
                         String targetId = null;
 
-                        // Calls such as this.save() or super.save()
-                        // can be resolved against their respective types
-                        // when those types exist in the analyzed source.
-                        if (call.getScope().isPresent()) {
+                        if (call.getScope().isEmpty()) {
+                            targetId = methodIds.get(
+                                    qualifiedName + ":" + calledName
+                                            + ":" + argumentCount
+                            );
+
+                            if (targetId == null) {
+                                targetId = methodIds.get(
+                                        qualifiedName + ":" + calledName
+                                );
+                            }
+                        } else {
                             String scopeName = call.getScope().get().toString();
 
                             if (scopeName.equals("this")) {
@@ -278,36 +363,137 @@ public class JavaLanguageParser implements LanguageParser {
                                         qualifiedName + ":" + calledName
                                                 + ":" + argumentCount
                                 );
+
+                                if (targetId == null) {
+                                    targetId = methodIds.get(
+                                            qualifiedName + ":" + calledName
+                                    );
+                                }
                             } else if (scopeName.equals("super")) {
-                                // The parent type is resolved from the
-                                // inheritance relationships below where
-                                // possible. Avoid guessing a target here.
-                                targetId = null;
+                                // Parent method resolution will be added later.
+                            } else {
+                                String fieldType = localVariableTypes.get(scopeName);
+
+                                if (fieldType == null) {
+                                    fieldType = fieldTypes.get(scopeName);
+                                }
+
+                                if (fieldType != null) {
+                                    String targetType = resolveTypeName(
+                                            fieldType,
+                                            packageName,
+                                            unit,
+                                            typeIds,
+                                            simpleTypeIds
+                                    );
+
+                                    if (targetType != null) {
+                                        targetId = methodIds.get(
+                                                targetType + ":" + calledName
+                                                        + ":" + argumentCount
+                                        );
+
+                                        if (targetId == null) {
+                                            targetId = methodIds.get(
+                                                    targetType + ":" + calledName
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    String targetType = resolveTypeName(
+                                            scopeName,
+                                            packageName,
+                                            unit,
+                                            typeIds,
+                                            simpleTypeIds
+                                    );
+
+                                    if (targetType != null) {
+                                        targetId = methodIds.get(
+                                                targetType + ":" + calledName
+                                                        + ":" + argumentCount
+                                        );
+
+                                        if (targetId == null) {
+                                            targetId = methodIds.get(
+                                                    targetType + ":" + calledName
+                                            );
+                                        }
+                                    }
+                                }
                             }
-                        } else {
-                            // Unqualified method calls are first checked
-                            // against the current class.
-                            targetId = methodIds.get(
-                                    qualifiedName + ":" + calledName
-                                            + ":" + argumentCount
-                            );
                         }
 
-                        if (targetId == null) {
-                            return;
+                        if (targetId != null && resolvedTargets.add(targetId)) {
+                            relationships.add(new CodeRelationship(
+                                    methodId,
+                                    CodeRelationship.RelationshipType.CALLS,
+                                    targetId
+                            ));
                         }
-
-                        relationships.add(new CodeRelationship(
-                                methodId,
-                                CodeRelationship.RelationshipType.CALLS,
-                                targetId
-                        ));
                     });
                 }
             }
         }
 
         return new CodeGraph(nodes, relationships);
+    }
+
+    private String resolveTypeName(
+            String name,
+            String packageName,
+            CompilationUnit unit,
+            Map<String, String> typeIds,
+            Map<String, String> simpleTypeIds
+    ) {
+        String cleanedName = name.replaceAll("<.*>", "").trim();
+
+        if (typeIds.containsKey(cleanedName)) {
+            return cleanedName;
+        }
+
+        String samePackage = packageName.isEmpty()
+                ? cleanedName
+                : packageName + "." + cleanedName;
+
+        if (typeIds.containsKey(samePackage)) {
+            return samePackage;
+        }
+
+        for (ImportDeclaration declaration : unit.getImports()) {
+            if (!declaration.isAsterisk()
+                    && declaration.getNameAsString().endsWith("." + cleanedName)) {
+                String importedName = declaration.getNameAsString();
+
+                if (typeIds.containsKey(importedName)) {
+                    return importedName;
+                }
+            }
+        }
+
+        String candidateId = simpleTypeIds.get(cleanedName);
+        if (candidateId == null) {
+            return null;
+        }
+
+        long matches = typeIds.entrySet().stream()
+                .filter(entry -> entry.getKey().endsWith("." + cleanedName))
+                .map(Map.Entry::getValue)
+                .distinct()
+                .count();
+
+        if (matches > 1) {
+            return null;
+        }
+
+        for (Map.Entry<String, String> entry : typeIds.entrySet()) {
+            if (entry.getValue().equals(candidateId)
+                    && !entry.getKey().contains(":")) {
+                return entry.getKey();
+            }
+        }
+
+        return null;
     }
 
     private String resolveTypeId(
@@ -317,24 +503,18 @@ public class JavaLanguageParser implements LanguageParser {
             Map<String, String> simpleTypeIds
     ) {
         String directMatch = typeIds.get(name);
-
         if (directMatch != null) {
             return directMatch;
         }
 
         if (!packageName.isEmpty()) {
             String packageMatch = typeIds.get(packageName + "." + name);
-
             if (packageMatch != null) {
                 return packageMatch;
             }
         }
 
-        // Only resolve a simple name if it uniquely identifies a type.
-        // A simple-name map alone cannot establish uniqueness, so verify
-        // that no other qualified type shares the same simple name.
         String candidate = simpleTypeIds.get(name);
-
         if (candidate == null) {
             return null;
         }

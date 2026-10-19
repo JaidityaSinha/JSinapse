@@ -1,7 +1,7 @@
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
-import CodeGalaxy from './CodeGalaxy'
+import CodeGalaxy, { type CodeGraph, type GraphNode } from './CodeGalaxy'
 
 type Repository = {
   name: string
@@ -20,24 +20,10 @@ type SourceFile = {
   size?: number
 }
 
-type GraphNode = {
-  id: string
-  type: string
-  name: string
-  filePath: string
-  startLine: number | null
-  endLine: number | null
-}
-
-type GraphRelationship = {
-  sourceId: string
-  type: string
-  targetId: string
-}
-
-type CodeGraphData = {
-  nodes: GraphNode[]
-  relationships: GraphRelationship[]
+type CallChainData = {
+  method: GraphNode
+  calls: GraphNode[]
+  calledBy: GraphNode[]
 }
 
 type View = 'overview' | 'galaxy'
@@ -55,40 +41,115 @@ function App() {
   const [error, setError] = useState('')
 
   const [view, setView] = useState<View>('overview')
-  const [graph, setGraph] = useState<CodeGraphData | null>(null)
+  const [graph, setGraph] = useState<CodeGraph | null>(null)
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState('')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [callChain, setCallChain] = useState<CallChainData | null>(null)
+  const [callChainLoading, setCallChainLoading] = useState(false)
+  const [callChainError, setCallChainError] = useState('')
 
-  const connectedComponents = graph && selectedNode
-      ? graph.relationships
-          .filter(
-              relationship =>
-                  relationship.sourceId === selectedNode.id ||
-                  relationship.targetId === selectedNode.id
+  const connectedComponents =
+      graph && selectedNode
+          ? graph.relationships
+              .filter(
+                  relationship =>
+                      relationship.sourceId === selectedNode.id ||
+                      relationship.targetId === selectedNode.id
+              )
+              .map(relationship => {
+                const isOutgoing =
+                    relationship.sourceId === selectedNode.id
+
+                const connectedId = isOutgoing
+                    ? relationship.targetId
+                    : relationship.sourceId
+
+                const connectedNode = graph.nodes.find(
+                    node => node.id === connectedId
+                )
+
+                if (!connectedNode) return null
+
+                return {
+                  node: connectedNode,
+                  relationship: relationship.type,
+                  direction: isOutgoing ? 'OUTGOING' : 'INCOMING',
+                }
+              })
+              .filter(
+                  (item): item is NonNullable<typeof item> => item !== null
+              )
+          : []
+
+  useEffect(() => {
+    if (
+        !repository ||
+        !selectedNode ||
+        !['METHOD', 'FUNCTION'].includes(selectedNode.type)
+    ) {
+      setCallChain(null)
+      setCallChainError('')
+      setCallChainLoading(false)
+      return
+    }
+
+    const selectedMethod = selectedNode
+    const [owner, repo] = repository.full_name.split('/')
+
+    if (!owner || !repo) return
+
+    const methodId = selectedMethod.id
+    let cancelled = false
+
+    async function loadCallChain() {
+      setCallChainLoading(true)
+      setCallChainError('')
+      setCallChain(null)
+
+      try {
+        const params = new URLSearchParams({
+          owner,
+          repo,
+          methodId,
+        })
+
+        const response = await fetch(
+            `http://localhost:8080/api/analysis/call-chain?${params}`
+        )
+
+        if (!response.ok) {
+          throw new Error(
+              `Call-chain request failed (${response.status}).`
           )
-          .map(relationship => {
-            const isOutgoing = relationship.sourceId === selectedNode.id
-            const connectedId = isOutgoing
-                ? relationship.targetId
-                : relationship.sourceId
+        }
 
-            const connectedNode = graph.nodes.find(
-                node => node.id === connectedId
-            )
+        const data: CallChainData = await response.json()
 
-            if (!connectedNode) return null
-
-            return {
-              node: connectedNode,
-              relationship: relationship.type,
-              direction: isOutgoing ? 'OUTGOING' : 'INCOMING',
-            }
-          })
-          .filter(
-              (item): item is NonNullable<typeof item> => item !== null
+        if (!cancelled) {
+          setCallChain(data)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setCallChainError(
+              err instanceof Error
+                  ? err.message
+                  : 'Could not load call chain.'
           )
-      : []
+        }
+      } finally {
+        if (!cancelled) {
+          setCallChainLoading(false)
+        }
+      }
+    }
+
+    void loadCallChain()
+
+    return () => {
+      cancelled = true
+    }
+  }, [repository, selectedNode])
 
   async function analyzeRepository() {
     setError('')
@@ -100,6 +161,8 @@ function App() {
     setFileContent('')
     setGraph(null)
     setSelectedNode(null)
+    setCallChain(null)
+    setCallChainError('')
     setView('overview')
 
     const match = repoUrl.trim().match(
@@ -145,14 +208,18 @@ function App() {
         )
 
         if (!filesResponse.ok) {
-          throw new Error(`Source file request failed (${filesResponse.status}).`)
+          throw new Error(
+              `Source file request failed (${filesResponse.status}).`
+          )
         }
 
         const files: SourceFile[] = await filesResponse.json()
         setSourceFiles(files)
       } catch (err) {
         setFileError(
-            err instanceof Error ? err.message : 'Could not load source files.'
+            err instanceof Error
+                ? err.message
+                : 'Could not load source files.'
         )
       } finally {
         setFilesLoading(false)
@@ -222,7 +289,7 @@ function App() {
         )
       }
 
-      const data: CodeGraphData = await response.json()
+      const data: CodeGraph = await response.json()
       setGraph(data)
     } catch (err) {
       setGraphError(
@@ -268,7 +335,7 @@ function App() {
               onClick={() => {
                 setView('overview')
                 document.querySelector('.section')?.scrollIntoView({
-                  behavior: 'smooth'
+                  behavior: 'smooth',
                 })
               }}
           >
@@ -346,7 +413,9 @@ function App() {
             </div>
 
             {error && (
-                <p role="alert" style={{ color: '#ff8585' }}>{error}</p>
+                <p role="alert" style={{ color: '#ff8585' }}>
+                  {error}
+                </p>
             )}
 
             {repository && (
@@ -357,12 +426,14 @@ function App() {
                   <h3>{repository.full_name}</h3>
                   <p>{repository.description || 'No description provided.'}</p>
 
-                  <div style={{
-                    display: 'flex',
-                    gap: '20px',
-                    flexWrap: 'wrap',
-                    marginTop: '16px'
-                  }}>
+                  <div
+                      style={{
+                        display: 'flex',
+                        gap: '20px',
+                        flexWrap: 'wrap',
+                        marginTop: '16px',
+                      }}
+                  >
                     <span>Language: {repository.language || 'Not specified'}</span>
                     <span>⭐ {repository.stargazers_count.toLocaleString()}</span>
                     <span>⑂ {repository.forks_count.toLocaleString()} forks</span>
@@ -445,16 +516,6 @@ function App() {
                           </article>
                       ) : (
                           <>
-                            <div style={{
-                              display: 'flex',
-                              gap: '18px',
-                              flexWrap: 'wrap',
-                              margin: '16px 0',
-                              color: '#aab4c8',
-                              fontSize: '13px'
-                            }}>
-                            </div>
-
                             <CodeGalaxy
                                 graph={graph}
                                 onSelectNode={setSelectedNode}
@@ -465,12 +526,14 @@ function App() {
                                     className="feature-card"
                                     style={{ marginTop: '16px' }}
                                 >
-                                  <div style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    gap: '12px',
-                                    alignItems: 'start'
-                                  }}>
+                                  <div
+                                      style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        gap: '12px',
+                                        alignItems: 'start',
+                                      }}
+                                  >
                                     <div>
                                       <div className="eyebrow">
                                         {selectedNode.type}
@@ -499,22 +562,140 @@ function App() {
                                       </p>
                                   )}
 
-
                                   <div style={{ marginTop: '20px' }}>
-                                    <h4 style={{ color: '#cbd5e1', marginBottom: '10px' }}>
+                                    {['METHOD', 'FUNCTION'].includes(selectedNode.type) && (
+                                        <div style={{ marginBottom: '24px' }}>
+                                          <h4
+                                              style={{
+                                                color: '#cbd5e1',
+                                                marginBottom: '10px',
+                                              }}
+                                          >
+                                            Call Chain
+                                          </h4>
+
+                                          {callChainLoading && (
+                                              <p>Tracing method calls...</p>
+                                          )}
+
+                                          {callChainError && (
+                                              <p
+                                                  role="alert"
+                                                  style={{ color: '#ff8585' }}
+                                              >
+                                                {callChainError}
+                                              </p>
+                                          )}
+
+                                          {!callChainLoading &&
+                                              !callChainError &&
+                                              callChain && (
+                                                  <>
+                                                    {([
+                                                      {
+                                                        title: 'Calls',
+                                                        nodes: callChain.calls,
+                                                      },
+                                                      {
+                                                        title: 'Called by',
+                                                        nodes: callChain.calledBy,
+                                                      },
+                                                    ]).map(group => (
+                                                        <div
+                                                            key={group.title}
+                                                            style={{ marginBottom: '16px' }}
+                                                        >
+                                                          <h5
+                                                              style={{
+                                                                color: '#94a3b8',
+                                                                marginBottom: '8px',
+                                                              }}
+                                                          >
+                                                            {group.title} ({group.nodes.length})
+                                                          </h5>
+
+                                                          {group.nodes.length === 0 ? (
+                                                              <p
+                                                                  style={{
+                                                                    color: '#64748b',
+                                                                    fontSize: '13px',
+                                                                  }}
+                                                              >
+                                                                No resolved methods found.
+                                                              </p>
+                                                          ) : (
+                                                              <div
+                                                                  style={{
+                                                                    display: 'flex',
+                                                                    flexDirection: 'column',
+                                                                    gap: '6px',
+                                                                  }}
+                                                              >
+                                                                {group.nodes.map(node => (
+                                                                    <button
+                                                                        key={node.id}
+                                                                        onClick={() =>
+                                                                            setSelectedNode(node)
+                                                                        }
+                                                                        style={{
+                                                                          textAlign: 'left',
+                                                                          padding: '10px 12px',
+                                                                          borderRadius: '8px',
+                                                                          border: '1px solid #303647',
+                                                                          background: '#101722',
+                                                                          color: '#e2e8f0',
+                                                                          cursor: 'pointer',
+                                                                          overflowWrap: 'anywhere',
+                                                                        }}
+                                                                    >
+                                                                      <strong>{node.name}</strong>
+                                                                      <span
+                                                                          style={{
+                                                                            display: 'block',
+                                                                            color: '#94a3b8',
+                                                                            fontSize: '11px',
+                                                                            marginTop: '4px',
+                                                                          }}
+                                                                      >
+                                                  {node.type} · {node.filePath}
+                                                </span>
+                                                                    </button>
+                                                                ))}
+                                                              </div>
+                                                          )}
+                                                        </div>
+                                                    ))}
+                                                  </>
+                                              )}
+                                        </div>
+                                    )}
+
+                                    <h4
+                                        style={{
+                                          color: '#cbd5e1',
+                                          marginBottom: '10px',
+                                        }}
+                                    >
                                       Connected components
                                     </h4>
 
                                     {connectedComponents.length === 0 ? (
-                                        <p style={{ color: '#94a3b8', fontSize: '13px' }}>
+                                        <p
+                                            style={{
+                                              color: '#94a3b8',
+                                              fontSize: '13px',
+                                            }}
+                                        >
                                           No connected components found for this node.
                                         </p>
                                     ) : (
-                                        <div style={{
-                                          display: 'flex',
-                                          flexDirection: 'column',
-                                          gap: '8px'
-                                        }}>
+                                        <div
+                                            style={{
+                                              display: 'flex',
+                                              flexDirection: 'column',
+                                              gap: '8px',
+                                            }}
+                                        >
                                           {connectedComponents.map((item, index) => (
                                               <button
                                                   key={`${item.node.id}-${item.relationship}-${index}`}
@@ -531,41 +712,52 @@ function App() {
                                                     border: '1px solid #303647',
                                                     background: '#101722',
                                                     color: '#e2e8f0',
-                                                    cursor: 'pointer'
+                                                    cursor: 'pointer',
                                                   }}
                                               >
-          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-            <strong>{item.node.name}</strong>
-            <span style={{
-              display: 'block',
-              color: '#94a3b8',
-              fontSize: '11px',
-              marginTop: '4px'
-            }}>
-              {item.node.type} · {item.direction}
-            </span>
-          </span>
+                                  <span
+                                      style={{
+                                        minWidth: 0,
+                                        overflowWrap: 'anywhere',
+                                      }}
+                                  >
+                                    <strong>{item.node.name}</strong>
+                                    <span
+                                        style={{
+                                          display: 'block',
+                                          color: '#94a3b8',
+                                          fontSize: '11px',
+                                          marginTop: '4px',
+                                        }}
+                                    >
+                                      {item.node.type} · {item.direction}
+                                    </span>
+                                  </span>
 
-                                                <span style={{
-                                                  color: '#67e8f9',
-                                                  fontSize: '10px',
-                                                  flexShrink: 0
-                                                }}>
-            {item.relationship}
-          </span>
+                                                <span
+                                                    style={{
+                                                      color: '#67e8f9',
+                                                      fontSize: '10px',
+                                                      flexShrink: 0,
+                                                    }}
+                                                >
+                                    {item.relationship}
+                                  </span>
                                               </button>
                                           ))}
                                         </div>
                                     )}
                                   </div>
 
-
                                   <button
                                       className="analyze-button"
                                       onClick={() => {
                                         setView('overview')
                                         void openFile(selectedNode.filePath)
-                                        window.scrollTo({ top: 0, behavior: 'smooth' })
+                                        window.scrollTo({
+                                          top: 0,
+                                          behavior: 'smooth',
+                                        })
                                       }}
                                   >
                                     Open source file ↗
@@ -594,21 +786,31 @@ function App() {
                       {filesLoading && <p>Loading source files...</p>}
 
                       {fileError && (
-                          <p role="alert" style={{ color: '#ff8585' }}>{fileError}</p>
+                          <p role="alert" style={{ color: '#ff8585' }}>
+                            {fileError}
+                          </p>
                       )}
 
-                      {!filesLoading && !fileError && sourceFiles.length === 0 && (
-                          <p>No supported source files or README files were found.</p>
-                      )}
+                      {!filesLoading &&
+                          !fileError &&
+                          sourceFiles.length === 0 && (
+                              <p>No supported source files or README files were found.</p>
+                          )}
 
                       {sourceFiles.length > 0 && (
-                          <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)',
-                            gap: '16px',
-                            alignItems: 'start'
-                          }}>
-                            <article className="feature-card" style={{ minWidth: 0 }}>
+                          <div
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns:
+                                    'minmax(220px, 0.8fr) minmax(0, 2fr)',
+                                gap: '16px',
+                                alignItems: 'start',
+                              }}
+                          >
+                            <article
+                                className="feature-card"
+                                style={{ minWidth: 0 }}
+                            >
                               <input
                                   type="text"
                                   placeholder="Search files..."
@@ -623,17 +825,19 @@ function App() {
                                     borderRadius: '8px',
                                     border: '1px solid #303647',
                                     background: '#0b0e16',
-                                    color: '#ffffff'
+                                    color: '#ffffff',
                                   }}
                               />
 
-                              <div style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '6px',
-                                maxHeight: '420px',
-                                overflowY: 'auto'
-                              }}>
+                              <div
+                                  style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '6px',
+                                    maxHeight: '420px',
+                                    overflowY: 'auto',
+                                  }}
+                              >
                                 {filteredFiles.map(file => (
                                     <button
                                         key={file.path}
@@ -643,15 +847,17 @@ function App() {
                                           padding: '10px',
                                           borderRadius: '6px',
                                           border: '1px solid',
-                                          borderColor: selectedFile === file.path
-                                              ? '#8b72ef'
-                                              : 'transparent',
-                                          background: selectedFile === file.path
-                                              ? '#25203d'
-                                              : 'transparent',
+                                          borderColor:
+                                              selectedFile === file.path
+                                                  ? '#8b72ef'
+                                                  : 'transparent',
+                                          background:
+                                              selectedFile === file.path
+                                                  ? '#25203d'
+                                                  : 'transparent',
                                           color: '#e5e7eb',
                                           cursor: 'pointer',
-                                          overflowWrap: 'anywhere'
+                                          overflowWrap: 'anywhere',
                                         }}
                                     >
                                       <span style={{ marginRight: '8px' }}>📄</span>
@@ -665,7 +871,10 @@ function App() {
                               </div>
                             </article>
 
-                            <article className="feature-card" style={{ minWidth: 0 }}>
+                            <article
+                                className="feature-card"
+                                style={{ minWidth: 0 }}
+                            >
                               <h3 style={{ overflowWrap: 'anywhere' }}>
                                 {selectedFile || 'Select a file to preview'}
                               </h3>
@@ -675,18 +884,20 @@ function App() {
                               )}
 
                               {fileContent && (
-                                  <pre style={{
-                                    marginTop: '16px',
-                                    padding: '16px',
-                                    borderRadius: '8px',
-                                    background: '#090b11',
-                                    color: '#d8deeb',
-                                    overflow: 'auto',
-                                    maxHeight: '520px',
-                                    whiteSpace: 'pre',
-                                    fontSize: '13px',
-                                    lineHeight: 1.6
-                                  }}>
+                                  <pre
+                                      style={{
+                                        marginTop: '16px',
+                                        padding: '16px',
+                                        borderRadius: '8px',
+                                        background: '#090b11',
+                                        color: '#d8deeb',
+                                        overflow: 'auto',
+                                        maxHeight: '520px',
+                                        whiteSpace: 'pre',
+                                        fontSize: '13px',
+                                        lineHeight: 1.6,
+                                      }}
+                                  >
                           <code>{fileContent}</code>
                         </pre>
                               )}
