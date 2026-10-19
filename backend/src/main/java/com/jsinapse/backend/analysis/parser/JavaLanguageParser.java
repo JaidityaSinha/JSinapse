@@ -1,4 +1,3 @@
-
 package com.jsinapse.backend.analysis.parser;
 
 import com.github.javaparser.JavaParser;
@@ -171,11 +170,13 @@ public class JavaLanguageParser implements LanguageParser {
 
                 for (MethodDeclaration method : declaration.getMethods()) {
                     String methodName = method.getNameAsString();
-                    int parameterCount = method.getParameters().size();
+                    String parameterTypes = method.getParameters().stream()
+                            .map(parameter -> normalizeTypeName(parameter.getType().asString()))
+                            .collect(java.util.stream.Collectors.joining(","));
 
                     String methodId = "method:" + filePath + ":"
-                            + typeName + ":" + methodName + ":"
-                            + parameterCount;
+                            + typeName + ":" + methodName + "("
+                            + parameterTypes + ")";
 
                     nodes.add(new CodeNode(
                             methodId,
@@ -187,13 +188,7 @@ public class JavaLanguageParser implements LanguageParser {
                     ));
 
                     methodIds.put(
-                            qualifiedName + ":" + methodName + ":"
-                                    + parameterCount,
-                            methodId
-                    );
-
-                    methodIds.putIfAbsent(
-                            qualifiedName + ":" + methodName,
+                            qualifiedName + ":" + methodName + ":" + parameterTypes,
                             methodId
                     );
 
@@ -206,10 +201,12 @@ public class JavaLanguageParser implements LanguageParser {
 
                 for (ConstructorDeclaration constructor : declaration.getConstructors()) {
                     String constructorName = constructor.getNameAsString();
-                    int parameterCount = constructor.getParameters().size();
+                    String parameterTypes = constructor.getParameters().stream()
+                            .map(parameter -> parameter.getType().asString())
+                            .collect(java.util.stream.Collectors.joining(","));
 
                     String constructorId = "constructor:" + filePath + ":"
-                            + typeName + ":" + parameterCount;
+                            + typeName + ":" + parameterTypes;
 
                     nodes.add(new CodeNode(
                             constructorId,
@@ -221,7 +218,7 @@ public class JavaLanguageParser implements LanguageParser {
                     ));
 
                     constructorIds.put(
-                            qualifiedName + ":" + parameterCount,
+                            qualifiedName + ":" + parameterTypes,
                             constructorId
                     );
 
@@ -297,15 +294,37 @@ public class JavaLanguageParser implements LanguageParser {
                         .getOrDefault(qualifiedName, Map.of());
 
                 for (MethodDeclaration method : declaration.getMethods()) {
+                    String currentParameterTypes = method.getParameters().stream()
+                            .map(parameter -> normalizeTypeName(parameter.getType().asString()))
+                            .collect(java.util.stream.Collectors.joining(","));
                     String methodId = "method:" + filePath + ":"
-                            + typeName + ":" + method.getNameAsString()
-                            + ":" + method.getParameters().size();
+                            + typeName + ":" + method.getNameAsString() + "("
+                            + currentParameterTypes + ")";
 
                     Set<String> resolvedTargets = new LinkedHashSet<>();
 
                     method.findAll(ObjectCreationExpr.class).forEach(creation -> {
                         String createdType = creation.getType().getNameAsString();
-                        int argumentCount = creation.getArguments().size();
+                        String argumentTypes = creation.getArguments().stream()
+                                .map(argument -> {
+                                    if (argument.isStringLiteralExpr()) {
+                                        return "String";
+                                    }
+                                    if (argument.isDoubleLiteralExpr()) {
+                                        return "double";
+                                    }
+                                    if (argument.isIntegerLiteralExpr()) {
+                                        return "int";
+                                    }
+                                    if (argument.isBooleanLiteralExpr()) {
+                                        return "boolean";
+                                    }
+                                    if (argument.isCharLiteralExpr()) {
+                                        return "char";
+                                    }
+                                    return "unknown";
+                                })
+                                .collect(java.util.stream.Collectors.joining(","));
 
                         String targetType = resolveTypeName(
                                 createdType,
@@ -317,7 +336,7 @@ public class JavaLanguageParser implements LanguageParser {
 
                         if (targetType != null) {
                             String constructorId = constructorIds.get(
-                                    targetType + ":" + argumentCount
+                                    targetType + ":" + argumentTypes
                             );
 
                             if (constructorId != null && resolvedTargets.add(constructorId)) {
@@ -341,34 +360,32 @@ public class JavaLanguageParser implements LanguageParser {
 
                     method.findAll(MethodCallExpr.class).forEach(call -> {
                         String calledName = call.getNameAsString();
-                        int argumentCount = call.getArguments().size();
+                        List<String> argumentTypes = call.getArguments().stream()
+                                .map(argument -> inferExpressionType(
+                                        argument,
+                                        localVariableTypes,
+                                        fieldTypes
+                                ))
+                                .toList();
                         String targetId = null;
 
                         if (call.getScope().isEmpty()) {
-                            targetId = methodIds.get(
-                                    qualifiedName + ":" + calledName
-                                            + ":" + argumentCount
+                            targetId = resolveMethodId(
+                                    qualifiedName,
+                                    calledName,
+                                    argumentTypes,
+                                    methodIds
                             );
-
-                            if (targetId == null) {
-                                targetId = methodIds.get(
-                                        qualifiedName + ":" + calledName
-                                );
-                            }
                         } else {
                             String scopeName = call.getScope().get().toString();
 
                             if (scopeName.equals("this")) {
-                                targetId = methodIds.get(
-                                        qualifiedName + ":" + calledName
-                                                + ":" + argumentCount
+                                targetId = resolveMethodId(
+                                        qualifiedName,
+                                        calledName,
+                                        argumentTypes,
+                                        methodIds
                                 );
-
-                                if (targetId == null) {
-                                    targetId = methodIds.get(
-                                            qualifiedName + ":" + calledName
-                                    );
-                                }
                             } else if (scopeName.equals("super")) {
                                 // Parent method resolution will be added later.
                             } else {
@@ -378,48 +395,29 @@ public class JavaLanguageParser implements LanguageParser {
                                     fieldType = fieldTypes.get(scopeName);
                                 }
 
-                                if (fieldType != null) {
-                                    String targetType = resolveTypeName(
-                                            fieldType,
-                                            packageName,
-                                            unit,
-                                            typeIds,
-                                            simpleTypeIds
+                                String targetType = fieldType == null
+                                        ? resolveTypeName(
+                                        scopeName,
+                                        packageName,
+                                        unit,
+                                        typeIds,
+                                        simpleTypeIds
+                                )
+                                        : resolveTypeName(
+                                        fieldType,
+                                        packageName,
+                                        unit,
+                                        typeIds,
+                                        simpleTypeIds
+                                );
+
+                                if (targetType != null) {
+                                    targetId = resolveMethodId(
+                                            targetType,
+                                            calledName,
+                                            argumentTypes,
+                                            methodIds
                                     );
-
-                                    if (targetType != null) {
-                                        targetId = methodIds.get(
-                                                targetType + ":" + calledName
-                                                        + ":" + argumentCount
-                                        );
-
-                                        if (targetId == null) {
-                                            targetId = methodIds.get(
-                                                    targetType + ":" + calledName
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    String targetType = resolveTypeName(
-                                            scopeName,
-                                            packageName,
-                                            unit,
-                                            typeIds,
-                                            simpleTypeIds
-                                    );
-
-                                    if (targetType != null) {
-                                        targetId = methodIds.get(
-                                                targetType + ":" + calledName
-                                                        + ":" + argumentCount
-                                        );
-
-                                        if (targetId == null) {
-                                            targetId = methodIds.get(
-                                                    targetType + ":" + calledName
-                                            );
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -437,6 +435,166 @@ public class JavaLanguageParser implements LanguageParser {
         }
 
         return new CodeGraph(nodes, relationships);
+    }
+
+    private String resolveMethodId(
+            String qualifiedTypeName,
+            String methodName,
+            List<String> argumentTypes,
+            Map<String, String> methodIds
+    ) {
+        String prefix = qualifiedTypeName + ":" + methodName + ":";
+        String bestMatch = null;
+        int bestScore = -1;
+        boolean ambiguous = false;
+
+        for (Map.Entry<String, String> entry : methodIds.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) {
+                continue;
+            }
+
+            String parameterSignature = entry.getKey().substring(prefix.length());
+            List<String> parameterTypes = parameterSignature.isEmpty()
+                    ? List.of()
+                    : List.of(parameterSignature.split(",", -1));
+
+            if (parameterTypes.size() != argumentTypes.size()) {
+                continue;
+            }
+
+            int score = 0;
+            boolean compatible = true;
+
+            for (int i = 0; i < parameterTypes.size(); i++) {
+                String argumentType = argumentTypes.get(i);
+                String parameterType = parameterTypes.get(i);
+
+                if (argumentType == null || argumentType.equals("unknown")) {
+                    continue;
+                }
+
+                if (typesMatch(argumentType, parameterType)) {
+                    score += 2;
+                } else if (isWideningPrimitiveConversion(argumentType, parameterType)) {
+                    score += 1;
+                } else {
+                    compatible = false;
+                    break;
+                }
+            }
+
+            if (!compatible) {
+                continue;
+            }
+
+            if (score > bestScore) {
+                bestMatch = entry.getValue();
+                bestScore = score;
+                ambiguous = false;
+            } else if (score == bestScore && !entry.getValue().equals(bestMatch)) {
+                ambiguous = true;
+            }
+        }
+
+        return ambiguous ? null : bestMatch;
+    }
+
+    private String inferExpressionType(
+            com.github.javaparser.ast.expr.Expression expression,
+            Map<String, String> localVariableTypes,
+            Map<String, String> fieldTypes
+    ) {
+        if (expression.isStringLiteralExpr()) {
+            return "String";
+        }
+        if (expression.isDoubleLiteralExpr()) {
+            return "double";
+        }
+        if (expression.isIntegerLiteralExpr()) {
+            return "int";
+        }
+        if (expression.isBooleanLiteralExpr()) {
+            return "boolean";
+        }
+        if (expression.isCharLiteralExpr()) {
+            return "char";
+        }
+        if (expression.isLongLiteralExpr()) {
+            return "long";
+        }
+        if (expression.isNullLiteralExpr()) {
+            return "null";
+        }
+        if (expression.isNameExpr()) {
+            String name = expression.asNameExpr().getNameAsString();
+            String type = localVariableTypes.get(name);
+            if (type == null) {
+                type = fieldTypes.get(name);
+            }
+            return type == null ? "unknown" : normalizeTypeName(type);
+        }
+        if (expression.isObjectCreationExpr()) {
+            return normalizeTypeName(
+                    expression.asObjectCreationExpr().getType().asString()
+            );
+        }
+        if (expression.isCastExpr()) {
+            return normalizeTypeName(
+                    expression.asCastExpr().getType().asString()
+            );
+        }
+        return "unknown";
+    }
+
+    private String normalizeTypeName(String typeName) {
+        String normalized = typeName.replaceAll("<.*>", "").trim();
+        if (normalized.contains(".")) {
+            normalized = normalized.substring(normalized.lastIndexOf('.') + 1);
+        }
+        if (normalized.endsWith("[]")) {
+            return normalizeTypeName(normalized.substring(0, normalized.length() - 2))
+                    + "[]";
+        }
+        return normalized;
+    }
+
+    private boolean typesMatch(String argumentType, String parameterType) {
+        String argument = normalizeTypeName(argumentType);
+        String parameter = normalizeTypeName(parameterType);
+
+        if (argument.equals(parameter)) {
+            return true;
+        }
+
+        return switch (argument) {
+            case "byte" -> parameter.equals("short")
+                    || parameter.equals("int")
+                    || parameter.equals("long")
+                    || parameter.equals("float")
+                    || parameter.equals("double");
+            case "short" -> parameter.equals("int")
+                    || parameter.equals("long")
+                    || parameter.equals("float")
+                    || parameter.equals("double");
+            case "char" -> parameter.equals("int")
+                    || parameter.equals("long")
+                    || parameter.equals("float")
+                    || parameter.equals("double");
+            case "int" -> parameter.equals("long")
+                    || parameter.equals("float")
+                    || parameter.equals("double");
+            case "long" -> parameter.equals("float") || parameter.equals("double");
+            case "float" -> parameter.equals("double");
+            default -> false;
+        };
+    }
+
+    private boolean isWideningPrimitiveConversion(
+            String argumentType,
+            String parameterType
+    ) {
+        return !normalizeTypeName(argumentType).equals(normalizeTypeName(parameterType))
+                && typesMatch(argumentType, parameterType);
     }
 
     private String resolveTypeName(
