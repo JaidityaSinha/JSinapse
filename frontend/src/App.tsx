@@ -26,7 +26,7 @@ type CallChainData = {
   calledBy: GraphNode[]
 }
 
-type View = 'overview' | 'galaxy'
+type View = 'overview' | 'galaxy' | 'dependencies'
 
 function App() {
   const [repoUrl, setRepoUrl] = useState('')
@@ -48,6 +48,12 @@ function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState('')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [dependencyFile, setDependencyFile] = useState('')
+  const [dependencySearch, setDependencySearch] = useState('')
+  const [dependencyFileSearch, setDependencyFileSearch] = useState('')
+  const [dependencyPickerOpen, setDependencyPickerOpen] = useState(false)
+  const [dependencyPreviewPath, setDependencyPreviewPath] = useState('')
+  const [dependencyDirection, setDependencyDirection] = useState<'both' | 'outgoing' | 'incoming'>('both')
   const [callChain, setCallChain] = useState<CallChainData | null>(null)
   const [callChainLoading, setCallChainLoading] = useState(false)
   const [callChainError, setCallChainError] = useState('')
@@ -60,7 +66,7 @@ function App() {
                       relationship.sourceId === selectedNode.id ||
                       relationship.targetId === selectedNode.id
               )
-              .map(relationship => {
+              .flatMap(relationship => {
                 const isOutgoing =
                     relationship.sourceId === selectedNode.id
 
@@ -72,17 +78,14 @@ function App() {
                     node => node.id === connectedId
                 )
 
-                if (!connectedNode) return null
+                if (!connectedNode) return []
 
-                return {
+                return [{
                   node: connectedNode,
                   relationship: relationship.type,
-                  direction: isOutgoing ? 'OUTGOING' : 'INCOMING',
-                }
+                  direction: isOutgoing ? 'OUTGOING' as const : 'INCOMING' as const,
+                }]
               })
-              .filter(
-                  (item): item is NonNullable<typeof item> => item !== null
-              )
           : []
 
   useEffect(() => {
@@ -168,6 +171,12 @@ function App() {
     setGraphLoading(false)
     setGraph(null)
     setSelectedNode(null)
+    setDependencyFile('')
+    setDependencySearch('')
+    setDependencyFileSearch('')
+    setDependencyPickerOpen(false)
+    setDependencyPreviewPath('')
+    setDependencyDirection('both')
     setCallChain(null)
     setCallChainError('')
     setView('overview')
@@ -282,12 +291,9 @@ function App() {
     }
   }
 
-  async function openGalaxy() {
-    setView('galaxy')
+  async function loadGraph(force = false) {
     setGraphError('')
-    setSelectedNode(null)
-
-    if (!repository || graph || graphLoading) return
+    if (!repository || (!force && (graph || graphLoading))) return
 
     const [owner, repo] = repository.full_name.split('/')
     if (!owner || !repo) return
@@ -327,6 +333,18 @@ function App() {
     }
   }
 
+  async function openGalaxy() {
+    setView('galaxy')
+    setSelectedNode(null)
+    await loadGraph()
+  }
+
+  async function openDependencies() {
+    setView('dependencies')
+    setSelectedNode(null)
+    await loadGraph()
+  }
+
   const filteredFiles = sourceFiles.filter(file =>
       file.path.toLowerCase().includes(fileSearch.toLowerCase())
   )
@@ -356,13 +374,8 @@ function App() {
           </button>
 
           <button
-              className="nav-item"
-              onClick={() => {
-                setView('overview')
-                document.querySelector('.section')?.scrollIntoView({
-                  behavior: 'smooth',
-                })
-              }}
+              className={`nav-item ${view === 'dependencies' ? 'active' : ''}`}
+              onClick={() => void openDependencies()}
           >
             ⌁ Dependencies
           </button>
@@ -389,7 +402,7 @@ function App() {
           <header className="topbar">
             <div>
               <span className="breadcrumb">Workspace / </span>
-              <span>{view === 'galaxy' ? 'Code Galaxy' : 'Overview'}</span>
+              <span>{view === 'galaxy' ? 'Code Galaxy' : view === 'dependencies' ? 'Dependencies' : 'Overview'}</span>
             </div>
             <div className="avatar">JS</div>
           </header>
@@ -794,6 +807,136 @@ function App() {
                       )}
                     </>
                 )}
+              </section>
+          ) : view === 'dependencies' ? (
+              <section className="section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Dependency Explorer</h2>
+                    <p>Inspect which project files depend on one another.</p>
+                  </div>
+                  <span className="coming-soon">
+                    {graph ? `${graph.relationships.filter(edge => edge.type === 'DEPENDS_ON').length} LINKS` : 'FILE DEPENDENCIES'}
+                  </span>
+                </div>
+
+                {!repository && (
+                    <article className="feature-card">
+                      <h3>Choose a repository first</h3>
+                      <p>Analyze a GitHub repository from Overview to explore its dependencies.</p>
+                    </article>
+                )}
+
+                {repository && graphLoading && (
+                    <article className="feature-card">
+                      <h3>Analyzing dependencies...</h3>
+                      <p>Resolving imports and building the dependency map.</p>
+                    </article>
+                )}
+
+                {repository && graphError && !graphLoading && (
+                    <article className="feature-card" role="alert">
+                      <h3>Could not load dependencies</h3>
+                      <p style={{ color: '#ff8585' }}>{graphError}</p>
+                      <button className="analyze-button" onClick={() => void loadGraph(true)}>Retry analysis</button>
+                    </article>
+                )}
+
+                {repository && graph && !graphLoading && !graphError && (() => {
+                  const fileNodes = graph.nodes
+                      .filter(node => node.type === 'FILE' && node.filePath)
+                      .filter((node, index, all) => all.findIndex(candidate => candidate.filePath === node.filePath) === index)
+                      .sort((a, b) => a.filePath.localeCompare(b.filePath))
+                  const selectedPath = dependencyFile || fileNodes[0]?.filePath || ''
+                  const dependencyEdges = graph.relationships.filter(edge => edge.type === 'DEPENDS_ON')
+                  type ConnectedDependency = {
+                    node: GraphNode
+                    direction: 'OUTGOING' | 'INCOMING'
+                    source: GraphNode
+                  }
+                  const allConnected: ConnectedDependency[] = []
+                  dependencyEdges.forEach(edge => {
+                    const source = fileNodes.find(node => node.id === edge.sourceId)
+                    const target = fileNodes.find(node => node.id === edge.targetId)
+                    if (!source || !target) return
+                    if (source.filePath === selectedPath && dependencyDirection !== 'incoming') {
+                      allConnected.push({ node: target, direction: 'OUTGOING', source })
+                    }
+                    if (target.filePath === selectedPath && dependencyDirection !== 'outgoing') {
+                      allConnected.push({ node: source, direction: 'INCOMING', source })
+                    }
+                  })
+                  const connected = allConnected.filter((item: ConnectedDependency) =>
+                      item.node.filePath.toLowerCase().includes(dependencySearch.toLowerCase())
+                  )
+                  return (
+                      <>
+                        {fileNodes.length === 0 ? (
+                            <article className="feature-card">
+                              <h3>No file-level dependencies found</h3>
+                              <p>The graph contains no file nodes to inspect. Try a repository with supported Java source files.</p>
+                            </article>
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 0.85fr) minmax(0, 1.6fr)', gap: '16px', alignItems: 'start' }}>
+                              <article className="feature-card" style={{ minWidth: 0 }}>
+                                <label htmlFor="dependency-file-search" style={{ display: 'block', marginBottom: '8px', color: '#aeb8cc', fontSize: '13px' }}>Selected source file</label>
+                                <div style={{ position: 'relative', marginBottom: '14px' }}>
+                                  <input
+                                      id="dependency-file-search"
+                                      aria-label="Search source files for dependencies"
+                                      placeholder="Search and select a source file..."
+                                      value={dependencyPickerOpen ? dependencyFileSearch : selectedPath}
+                                      onFocus={() => { setDependencyPickerOpen(true); setDependencyFileSearch('') }}
+                                      onChange={event => { setDependencyFileSearch(event.target.value); setDependencyPickerOpen(true) }}
+                                      onKeyDown={event => {
+                                        if (event.key === 'Escape') setDependencyPickerOpen(false)
+                                        if (event.key === 'Enter') {
+                                          const match = fileNodes.find(node => node.filePath.toLowerCase().includes(dependencyFileSearch.toLowerCase()))
+                                          if (match) { setDependencyFile(match.filePath); setDependencySearch(''); setDependencyPickerOpen(false); setDependencyFileSearch('') }
+                                        }
+                                      }}
+                                      style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px', border: '1px solid #303647', background: '#0b0e16', color: '#fff' }}
+                                  />
+                                  {dependencyPickerOpen && (
+                                      <div style={{ position: 'absolute', zIndex: 10, top: 'calc(100% + 4px)', left: 0, right: 0, maxHeight: '260px', overflowY: 'auto', border: '1px solid #303647', borderRadius: '8px', background: '#10131d', boxShadow: '0 12px 28px rgba(0,0,0,.35)' }}>
+                                        {fileNodes.filter(node => node.filePath.toLowerCase().includes(dependencyFileSearch.toLowerCase())).slice(0, 100).map(node => (
+                                            <button key={node.id} type="button" onMouseDown={event => event.preventDefault()} onClick={() => { setDependencyFile(node.filePath); setDependencySearch(''); setDependencyPickerOpen(false); setDependencyFileSearch('') }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px', border: 0, borderBottom: '1px solid #252b3a', background: node.filePath === selectedPath ? '#25203d' : 'transparent', color: '#e5e7eb', cursor: 'pointer', overflowWrap: 'anywhere' }}>{node.filePath}</button>
+                                        ))}
+                                        {fileNodes.filter(node => node.filePath.toLowerCase().includes(dependencyFileSearch.toLowerCase())).length === 0 && <p style={{ margin: 0, padding: '12px', color: '#aeb8cc', fontSize: '13px' }}>No source files match that search.</p>}
+                                      </div>
+                                  )}
+                                </div>
+                                <input aria-label="Search dependencies" placeholder="Filter dependency paths..." value={dependencySearch} onChange={event => setDependencySearch(event.target.value)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', marginBottom: '12px', borderRadius: '8px', border: '1px solid #303647', background: '#0b0e16', color: '#fff' }} />
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                                  {(['both', 'outgoing', 'incoming'] as const).map(direction => <button key={direction} onClick={() => setDependencyDirection(direction)} style={{ border: '1px solid', borderColor: dependencyDirection === direction ? '#8b72ef' : '#303647', background: dependencyDirection === direction ? '#25203d' : '#0b0e16', color: '#e5e7eb', borderRadius: '7px', padding: '7px 9px', cursor: 'pointer', textTransform: 'capitalize' }}>{direction === 'both' ? 'All directions' : direction}</button>)}
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', color: '#aeb8cc', fontSize: '12px', marginBottom: '8px' }}><span>{connected.length} dependencies</span><span>{dependencyEdges.length} total links</span></div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', maxHeight: '440px', overflowY: 'auto' }}>
+                                  {connected.map((item, index) => <article key={`${item.direction}-${item.node.id}-${index}`} style={{ padding: '10px', borderRadius: '7px', border: '1px solid #303647', background: '#0b0e16', minWidth: 0 }}><strong style={{ display: 'block', fontSize: '12px', fontWeight: 600, overflowWrap: 'anywhere', color: '#e5e7eb' }}>{item.node.filePath}</strong><span style={{ display: 'block', color: item.direction === 'OUTGOING' ? '#67e8f9' : '#c4b5fd', fontSize: '11px', marginTop: '5px' }}>{item.direction === 'OUTGOING' ? 'Selected file depends on this file' : 'This file depends on the selected file'}</span><div style={{ display: 'flex', gap: '7px', flexWrap: 'wrap', marginTop: '10px' }}><button type="button" onClick={() => { setDependencyPreviewPath(item.node.filePath); void openFile(item.node.filePath) }} style={{ border: '1px solid #3b82a0', background: '#123043', color: '#a5e7ff', borderRadius: '6px', padding: '6px 9px', cursor: 'pointer', fontSize: '12px' }}>Load preview</button><button type="button" onClick={() => { setDependencyPreviewPath(''); setView('overview'); void openFile(item.node.filePath); window.scrollTo({ top: 0, behavior: 'smooth' }) }} style={{ border: '1px solid #303647', background: '#151a26', color: '#e5e7eb', borderRadius: '6px', padding: '6px 9px', cursor: 'pointer', fontSize: '12px' }}>Show in Source Explorer ↗</button></div></article>)}
+                                  {connected.length === 0 && <p style={{ color: '#aeb8cc', fontSize: '13px' }}>No dependencies match this selection and filter.</p>}
+                                </div>
+                              </article>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
+                                <article className="feature-card" style={{ minWidth: 0 }}>
+                                  <div className="eyebrow">SELECTED FILE</div>
+                                  <h3 style={{ overflowWrap: 'anywhere' }}>{selectedPath}</h3>
+                                  <p style={{ color: '#aeb8cc' }}>{connected.filter(item => item.direction === 'OUTGOING').length} outgoing · {connected.filter(item => item.direction === 'INCOMING').length} incoming dependencies shown</p>
+                                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><button type="button" onClick={() => { setDependencyPreviewPath(selectedPath); void openFile(selectedPath) }} style={{ border: '1px solid #3b82a0', background: '#123043', color: '#a5e7ff', borderRadius: '7px', padding: '9px 12px', cursor: 'pointer' }}>Load preview</button><button type="button" className="analyze-button" onClick={() => { setDependencyPreviewPath(''); setView('overview'); void openFile(selectedPath); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>Show in Source Explorer ↗</button></div>
+                                </article>
+                                {dependencyPreviewPath && selectedFile === dependencyPreviewPath && (
+                                    <article className="feature-card" style={{ minWidth: 0 }}>
+                                      <div className="section-heading"><div><h3 style={{ overflowWrap: 'anywhere' }}>{dependencyPreviewPath}</h3><p>Source preview</p></div><button type="button" onClick={() => setDependencyPreviewPath('')} style={{ border: '1px solid #303647', background: '#0b0e16', color: '#cbd5e1', borderRadius: '6px', padding: '6px 9px', cursor: 'pointer' }}>Hide preview</button></div>
+                                      {fileContentLoading && <p>Loading file contents...</p>}
+                                      {fileError && <p role="alert" style={{ color: '#ff8585' }}>{fileError}</p>}
+                                      {!fileContentLoading && !fileError && fileContent !== '' && <pre style={{ marginTop: '12px', padding: '14px', borderRadius: '8px', background: '#090b11', color: '#d8deeb', overflow: 'auto', maxHeight: '460px', whiteSpace: 'pre', fontSize: '12px', lineHeight: 1.6 }}><code>{fileContent}</code></pre>}
+                                    </article>
+                                )}
+                              </div>
+                            </div>
+                        )}
+                      </>
+                  )
+                })()}
               </section>
           ) : (
               <>

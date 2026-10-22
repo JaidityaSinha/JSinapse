@@ -231,6 +231,11 @@ public class JavaLanguageParser implements LanguageParser {
             }
         }
 
+        // Resolve imports against source types in this repository. Keep IMPORTS
+        // edges to import-name nodes, and add file-to-file DEPENDS_ON edges only
+        // when the imported type is actually present in the analyzed source set.
+        addImportDependencies(compilationUnits, relationships);
+
         // Build the inheritance index before resolving calls so resolution does not
         // depend on the order in which repository files are supplied.
         Map<String, List<String>> parentTypesByClass = new LinkedHashMap<>();
@@ -560,6 +565,82 @@ public class JavaLanguageParser implements LanguageParser {
         }
 
         return new CodeGraph(nodes, relationships);
+    }
+
+    private void addImportDependencies(
+            Map<String, CompilationUnit> compilationUnits,
+            List<CodeRelationship> relationships
+    ) {
+        Map<String, String> sourceFileByQualifiedType = new LinkedHashMap<>();
+        Map<String, Set<String>> sourceFilesByPackage = new LinkedHashMap<>();
+
+        for (Map.Entry<String, CompilationUnit> entry : compilationUnits.entrySet()) {
+            String filePath = entry.getKey();
+            CompilationUnit unit = entry.getValue();
+            String packageName = unit.getPackageDeclaration()
+                    .map(declaration -> declaration.getNameAsString())
+                    .orElse("");
+
+            for (TypeDeclaration<?> type : unit.getTypes()) {
+                if (!(type instanceof ClassOrInterfaceDeclaration declaration)) {
+                    continue;
+                }
+                String typeName = declaration.getNameAsString();
+                String qualifiedName = packageName.isEmpty()
+                        ? typeName : packageName + "." + typeName;
+                sourceFileByQualifiedType.putIfAbsent(qualifiedName, filePath);
+                sourceFilesByPackage.computeIfAbsent(packageName,
+                        ignored -> new LinkedHashSet<>()).add(filePath);
+            }
+        }
+
+        Set<String> existingEdges = new LinkedHashSet<>();
+        for (CodeRelationship relationship : relationships) {
+            if (relationship.type() == CodeRelationship.RelationshipType.DEPENDS_ON) {
+                existingEdges.add(relationship.sourceId() + "|" + relationship.targetId());
+            }
+        }
+
+        for (Map.Entry<String, CompilationUnit> entry : compilationUnits.entrySet()) {
+            String sourceFile = entry.getKey();
+            String sourceFileId = "file:" + sourceFile;
+            for (ImportDeclaration declaration : entry.getValue().getImports()) {
+                String importedName = declaration.getNameAsString();
+                boolean wildcard = declaration.isAsterisk();
+
+                // For static imports, the declaring type is the owner of the member.
+                String targetName = importedName;
+                if (declaration.isStatic() && !wildcard) {
+                    int lastDot = targetName.lastIndexOf('.');
+                    if (lastDot > 0) targetName = targetName.substring(0, lastDot);
+                }
+
+                Set<String> targetFiles = new LinkedHashSet<>();
+                if (wildcard && !declaration.isStatic()) {
+                    targetFiles.addAll(sourceFilesByPackage.getOrDefault(
+                            importedName, Set.of()));
+                } else if (wildcard) {
+                    String targetFile = sourceFileByQualifiedType.get(importedName);
+                    if (targetFile != null) targetFiles.add(targetFile);
+                } else {
+                    String targetFile = sourceFileByQualifiedType.get(targetName);
+                    if (targetFile != null) targetFiles.add(targetFile);
+                }
+
+                for (String targetFile : targetFiles) {
+                    if (sourceFile.equals(targetFile)) continue;
+                    String targetFileId = "file:" + targetFile;
+                    String edgeKey = sourceFileId + "|" + targetFileId;
+                    if (existingEdges.add(edgeKey)) {
+                        relationships.add(new CodeRelationship(
+                                sourceFileId,
+                                CodeRelationship.RelationshipType.DEPENDS_ON,
+                                targetFileId
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     private Set<String> findPolymorphicTargets(

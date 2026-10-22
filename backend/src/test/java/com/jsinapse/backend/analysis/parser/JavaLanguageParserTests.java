@@ -18,6 +18,78 @@ class JavaLanguageParserTests {
     private final JavaLanguageParser parser = new JavaLanguageParser();
 
     @Test
+    void resolvesExplicitInternalImportsToFileDependencies() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("src/main/java/com/example/service/UserService.java", """
+                package com.example.service;
+                public class UserService {}
+                """);
+        files.put("src/main/java/com/example/controller/UserController.java", """
+                package com.example.controller;
+                import com.example.service.UserService;
+                public class UserController {}
+                """);
+
+        CodeGraph graph = parser.parse(files);
+
+        assertTrue(graph.relationships().contains(new CodeRelationship(
+                "file:src/main/java/com/example/controller/UserController.java",
+                CodeRelationship.RelationshipType.DEPENDS_ON,
+                "file:src/main/java/com/example/service/UserService.java"
+        )));
+    }
+
+    @Test
+    void resolvesWildcardImportsToTypesInTheImportedPackage() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("src/main/java/com/example/model/User.java", """
+                package com.example.model;
+                public class User {}
+                """);
+        files.put("src/main/java/com/example/model/Order.java", """
+                package com.example.model;
+                public class Order {}
+                """);
+        files.put("src/main/java/com/example/api/Controller.java", """
+                package com.example.api;
+                import com.example.model.*;
+                public class Controller {}
+                """);
+
+        CodeGraph graph = parser.parse(files);
+        Set<String> dependencies = graph.relationships().stream()
+                .filter(edge -> edge.sourceId().equals(
+                        "file:src/main/java/com/example/api/Controller.java"))
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.DEPENDS_ON)
+                .map(CodeRelationship::targetId)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of(
+                "file:src/main/java/com/example/model/User.java",
+                "file:src/main/java/com/example/model/Order.java"
+        ), dependencies);
+    }
+
+    @Test
+    void doesNotCreateDependenciesForExternalImportsOrSelfImports() {
+        CodeGraph graph = parser.parse(Map.of(
+                "src/main/java/com/example/Thing.java", """
+                        package com.example;
+                        import java.util.List;
+                        import com.example.*;
+                        public class Thing {}
+                        """
+        ));
+
+        assertTrue(graph.relationships().stream()
+                .filter(edge -> edge.type() == CodeRelationship.RelationshipType.DEPENDS_ON)
+                .noneMatch(edge -> edge.sourceId().equals(edge.targetId())));
+        assertTrue(graph.relationships().stream()
+                .noneMatch(edge -> edge.type() == CodeRelationship.RelationshipType.DEPENDS_ON
+                        && edge.targetId().contains("java.util")));
+    }
+
+    @Test
     void resolvesOverloadedMethodsByArgumentType() {
         Map<String, String> files = Map.of(
                 "src/OverloadDemo.java",
