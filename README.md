@@ -1,3 +1,11 @@
+![Java](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring_Boot-Backend-6DB33F?logo=springboot)
+![React](https://img.shields.io/badge/React-Frontend-61DAFB?logo=react)
+![TypeScript](https://img.shields.io/badge/TypeScript-Frontend-3178C6?logo=typescript)
+![Vite](https://img.shields.io/badge/Vite-Build_Tool-646CFF?logo=vite)
+![JavaParser](https://img.shields.io/badge/JavaParser-Code_Analysis-blue)
+![GitHub API](https://img.shields.io/badge/GitHub_API-Integration-181717?logo=github)
+
 # JSinapse
 
 ### Visual Code Intelligence Platform
