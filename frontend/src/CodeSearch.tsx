@@ -48,6 +48,7 @@ export default function CodeSearch({
     const [aiResult, setAiResult] = useState<AiResponse | null>(null)
     const [aiLoading, setAiLoading] = useState(false)
     const [aiError, setAiError] = useState('')
+    const API_BASE_URL = import.meta.env.VITE_API_URL;
 
     async function searchCode() {
         if (!owner || !repo) {
@@ -77,7 +78,7 @@ export default function CodeSearch({
             }
 
             const response = await fetch(
-                `http://localhost:8080/api/code-search?${params.toString()}`
+                `${API_BASE_URL}/api/code-search?${params.toString()}`
             )
 
             if (!response.ok) {
@@ -121,7 +122,7 @@ export default function CodeSearch({
             })
 
             const response = await fetch(
-                `http://localhost:8080/api/ai/search?${params.toString()}`
+                `${API_BASE_URL}/api/ai/search?${params.toString()}`
             )
 
             if (!response.ok) {
