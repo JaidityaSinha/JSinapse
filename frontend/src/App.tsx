@@ -459,7 +459,50 @@ function App() {
               <span className="breadcrumb">Workspace / </span>
               <span>{view === 'galaxy' ? 'Code Galaxy' : view === 'dependencies' ? 'Dependencies' : view === 'search' ? 'Code Search' : view === 'source' ? 'Source Explorer' : 'Overview'}</span>
             </div>
-            <div className="avatar">JS</div>
+            <div
+                className="avatar"
+                aria-label="JSinapse neural network"
+                title="JSinapse"
+            >
+              <svg
+                  className="avatar-brain"
+                  viewBox="0 0 40 40"
+                  width="30"
+                  height="30"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                    d="M19 9.5C17 5.5 11 6.5 10 11C5 11 4 17 7 20C3.5 24 6 30 11 30C12 35 18 35 20 31V10"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+                <path
+                    d="M21 9.5C23 5.5 29 6.5 30 11C35 11 36 17 33 20C36.5 24 34 30 29 30C28 35 22 35 20 31V10"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+                <path
+                    d="M10 14L16 18L12 24L19 27M30 14L24 18L28 24L21 27M16 18H24M12 24H28"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity=".85"
+                />
+                <circle className="avatar-brain-node" cx="10" cy="14" r="2" />
+                <circle className="avatar-brain-node" cx="16" cy="18" r="2" />
+                <circle className="avatar-brain-node" cx="24" cy="18" r="2" />
+                <circle className="avatar-brain-node" cx="30" cy="14" r="2" />
+                <circle className="avatar-brain-node" cx="12" cy="24" r="2" />
+                <circle className="avatar-brain-node" cx="28" cy="24" r="2" />
+                <circle className="avatar-brain-node" cx="20" cy="27" r="2" />
+              </svg>
+            </div>
           </header>
 
 
