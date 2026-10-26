@@ -33,7 +33,7 @@ export type CodeGraph = {
 
 type Props = {
     graph: CodeGraph;
-    onSelectNode?: (node: GraphNode) => void;
+    onSelectNode?: (node: GraphNode | null) => void;
     focusNodeId?: string | null;
 };
 
@@ -331,6 +331,8 @@ export default function CodeGalaxy({
         setSearchQuery("");
         setSearchOpen(false);
         setVisibleRelationshipTypes(new Set(availableRelationshipTypes));
+
+        onSelectNode?.(null);
     };
 
     const handleShowAll = () => {
