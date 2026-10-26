@@ -30,6 +30,7 @@ type View = 'overview' | 'galaxy' | 'dependencies' | 'search' | 'source'
 
 function App() {
   const [backendOnline, setBackendOnline] = useState(false)
+  const API_BASE_URL = import.meta.env.VITE_API_URL;
 
   const [repoUrl, setRepoUrl] = useState('')
   const [repository, setRepository] = useState<Repository | null>(null)
@@ -97,7 +98,7 @@ function App() {
     const checkBackend = async () => {
       try {
         const response = await fetch(
-            'http://localhost:8080/api/health'
+            '${API_BASE_URL}/api/health'
         )
 
         if (active) {
@@ -156,7 +157,7 @@ function App() {
         })
 
         const response = await fetch(
-            `http://localhost:8080/api/analysis/call-chain?${params}`
+            `${API_BASE_URL}/api/analysis/call-chain?${params}`
         )
 
         if (!response.ok) {
@@ -237,7 +238,7 @@ function App() {
 
     try {
       const response = await fetch(
-          `http://localhost:8080/api/github/repository?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+          `${API_BASE_URL}/api/github/repository?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
       )
 
       if (!response.ok) {
@@ -258,7 +259,7 @@ function App() {
 
       try {
         const filesResponse = await fetch(
-            `http://localhost:8080/api/github/source-files?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+            `${API_BASE_URL}/api/github/source-files?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
         )
 
         if (!filesResponse.ok) {
@@ -305,7 +306,7 @@ function App() {
 
     try {
       const response = await fetch(
-          `http://localhost:8080/api/github/file?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`
+          `${API_BASE_URL}/api/github/file?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`
       )
 
       if (!response.ok) {
@@ -347,7 +348,7 @@ function App() {
 
     try {
       const response = await fetch(
-          `http://localhost:8080/api/analysis/graph?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+          `${API_BASE_URL}/api/analysis/graph?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
       )
 
       if (!response.ok) {
