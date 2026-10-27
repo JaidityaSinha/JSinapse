@@ -20,18 +20,11 @@ public class GitHubService {
     private final RestClient restClient;
 
     public GitHubService() {
-        Dotenv dotenv = Dotenv.configure()
-                .directory("C:/Users/jaidi/Documents/JSinapse/backend")
-                .ignoreIfMissing()
-                .load();
+        String token = System.getenv("GITHUB_TOKEN");
 
-        String token = dotenv.get("GITHUB_TOKEN");
-
-        if (token == null || token.isBlank()) {
-            token = System.getenv("GITHUB_TOKEN");
-        }
-
-        System.out.println("GitHub token loaded: " + (token != null && !token.isBlank()));
+        System.out.println(
+                "GitHub token loaded: " + (token != null && !token.isBlank())
+        );
 
         RestClient.Builder builder = RestClient.builder()
                 .baseUrl("https://api.github.com")
