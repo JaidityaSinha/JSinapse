@@ -193,6 +193,28 @@ function App() {
     }
   }, [repository, selectedNode])
 
+  useEffect(() => {
+    const handlePopState = () => {
+      setView('overview');
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'overview' && window.history.state?.jsinapseTab !== true) {
+      window.history.pushState(
+          { jsinapseTab: true },
+          '',
+          window.location.href
+      );
+    }
+  }, [view]);
+
   async function analyzeRepository() {
     setError('')
     setFileError('')
